@@ -25,6 +25,8 @@ final class Preferences: ObservableObject {
     @Published var clipboardExcludedApps: [String] { didSet { defaults.set(clipboardExcludedApps, forKey: key("clipboardExcludedApps")) } }
 
     @Published var hasCompletedFirstLaunch: Bool { didSet { defaults.set(hasCompletedFirstLaunch, forKey: key("hasCompletedFirstLaunch")) } }
+    /// Whether KongFetch has asked for access to Documents, Desktop, Downloads and iCloud Drive.
+    @Published var folderAccessRequested: Bool { didSet { defaults.set(folderAccessRequested, forKey: key("folderAccessRequested")) } }
 
     static let defaultExcludedApps = [
         "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop",
@@ -47,6 +49,7 @@ final class Preferences: ObservableObject {
         autoPaste = value("autoPaste", true)
         clipboardExcludedApps = value("clipboardExcludedApps", Self.defaultExcludedApps)
         hasCompletedFirstLaunch = value("hasCompletedFirstLaunch", false)
+        folderAccessRequested = value("folderAccessRequested", false)
     }
 
     var clipboardLimits: ClipboardHistory.Limits {

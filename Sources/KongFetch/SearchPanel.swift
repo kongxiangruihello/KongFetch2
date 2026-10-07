@@ -23,6 +23,8 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
 
     /// Set by the app delegate to open Settings.
     var openSettings: (() -> Void)?
+    /// Explains missing folder permissions when a search finds nothing.
+    var accessHint: (() -> String?)?
 
     init(coordinator: FileSearchCoordinator) {
         self.coordinator = coordinator
@@ -175,7 +177,11 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
             self.setResults(results)
             if finished {
                 self.spinner.stopAnimation(nil)
-                self.statusLabel.stringValue = results.isEmpty ? "没有找到。可试试拼音首字母、减少关键词，或在设置中检查排除的文件夹" : "\(results.count) 个结果"
+                if results.isEmpty {
+                    self.statusLabel.stringValue = self.accessHint?() ?? "没有找到。可试试拼音首字母、减少关键词，或在设置中检查排除的文件夹"
+                } else {
+                    self.statusLabel.stringValue = "\(results.count) 个结果"
+                }
             } else {
                 self.statusLabel.stringValue = "正在搜索… \(results.count)"
             }

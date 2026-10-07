@@ -21,6 +21,9 @@ final class AppStatus: ObservableObject {
         var bundlePath = ""
         var clipboardCount = 0
         var clipboardBytes = 0
+        /// Folder id → allowed. Empty until access has been requested once.
+        var folderAccess: [String: Bool] = [:]
+        var fullDiskAccess = false
     }
 
     @Published private(set) var snapshot = Snapshot()
@@ -52,6 +55,7 @@ struct SettingsActions {
     var setLoginItem: (Bool) -> Void
     var clearClipboard: (_ includingPinned: Bool) -> Void
     var revealDataFolder: () -> Void
+    var requestFolderAccess: () -> Void
 }
 
 struct SettingsView: View {
@@ -63,7 +67,7 @@ struct SettingsView: View {
         TabView {
             GeneralSettings(preferences: preferences, status: status, actions: actions)
                 .tabItem { Label("通用", systemImage: "gearshape") }
-            SearchSettings(preferences: preferences)
+            SearchSettings(preferences: preferences, status: status, actions: actions)
                 .tabItem { Label("搜索", systemImage: "magnifyingglass") }
             ClipboardSettings(preferences: preferences, status: status, actions: actions)
                 .tabItem { Label("剪贴板", systemImage: "doc.on.clipboard") }
@@ -98,7 +102,7 @@ private struct GeneralSettings: View {
                         .frame(width: 220, height: 24)
                 }
                 if preferences.searchShortcut != nil && !status.snapshot.searchHotKeyRegistered {
-                    Text("这个组合已被其他应用占用，请换一个。").font(.caption).foregroundColor(.orange)
+                    Text("这个组合已被系统或其他应用占用，请换一个。").font(.caption).foregroundColor(.orange)
                 }
                 Picker("连按两次唤起", selection: $preferences.doubleTapModifier) {
                     ForEach(TapModifier.allCases) { Text($0.title).tag($0) }
@@ -130,11 +134,40 @@ private struct GeneralSettings: View {
 
 private struct SearchSettings: View {
     @ObservedObject var preferences: Preferences
+    @ObservedObject var status: AppStatus
+    let actions: SettingsActions
 
     var body: some View {
         Form {
+            Section("文件访问权限") {
+                Text("macOS 只把已授权文件夹中的搜索结果交给 KongFetch。未授权的文件夹里的文件搜不到。")
+                    .font(.callout).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                if status.snapshot.fullDiskAccess {
+                    StatusBadge(ok: true, text: "已获得“完全磁盘访问权限”，可以搜索所有位置")
+                } else {
+                    ForEach(FolderAccess.folders) { folder in
+                        HStack {
+                            Text(folder.title)
+                            Spacer()
+                            if let allowed = status.snapshot.folderAccess[folder.id] {
+                                StatusBadge(ok: allowed, text: allowed ? "已允许" : "未允许")
+                            } else {
+                                Text("尚未请求").foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    HStack {
+                        Button("请求授权") { actions.requestFolderAccess() }
+                        Button("打开“文件与文件夹”设置…") { FolderAccess.openFilesAndFoldersSettings() }
+                        Spacer()
+                        Button("完全磁盘访问权限…") { FolderAccess.openFullDiskAccessSettings() }
+                    }
+                    Text("点“请求授权”后，系统会逐个询问，请选“允许”。之前点过“不允许”的，需要在“文件与文件夹”设置里打开。也可以改为授予“完全磁盘访问权限”。")
+                        .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Section("范围") {
-                Toggle("包含“资源库”和隐藏文件夹", isOn: $preferences.includeLibraryFolders)
+                Toggle("包含系统文件夹、“资源库”、隐藏文件夹和应用内部文件", isOn: $preferences.includeLibraryFolders)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("不搜索这些文件夹（每行一个，可用 ~）")
                     TextEditor(text: Binding(
@@ -179,7 +212,7 @@ private struct ClipboardSettings: View {
                     ShortcutRecorder(shortcut: $preferences.clipboardShortcut).frame(width: 220, height: 24)
                 }
                 if preferences.clipboardShortcut != nil && !status.snapshot.clipboardHotKeyRegistered {
-                    Text("这个组合已被其他应用占用，请换一个。").font(.caption).foregroundColor(.orange)
+                    Text("这个组合已被系统或其他应用占用，请换一个。").font(.caption).foregroundColor(.orange)
                 }
                 Toggle("选中后直接粘贴到当前应用", isOn: $preferences.autoPaste)
                 if preferences.autoPaste {
@@ -438,16 +471,23 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     func present() {
         status.startUpdating()
-        NSApp.activate(ignoringOtherApps: true)
+        // A menu-bar-only app is often refused activation since macOS 14; showing a Dock icon
+        // while Settings is open makes it a normal app that can come to the front.
+        NSApp.setActivationPolicy(.regular)
         if window?.isVisible != true { window?.center() }
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+        if #available(macOS 14, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
     }
 
     func windowWillClose(_ notification: Notification) {
         status.stopUpdating()
-        // KongFetch has no Dock icon; give focus back to the previous app.
-        DispatchQueue.main.async { NSApp.hide(nil) }
+        // Back to a menu-bar-only app, and give focus back to the previous app.
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.accessory)
+            NSApp.hide(nil)
+        }
     }
 }
 
@@ -459,7 +499,7 @@ enum LoginItem {
     static var note: String {
         switch SMAppService.mainApp.status {
         case .requiresApproval: return "需要在“系统设置 › 通用 › 登录项”中允许 KongFetch。"
-        case .notFound: return Bundle.main.bundleURL.pathExtension == "app" ? "请先把 KongFetch 放进“应用程序”文件夹。" : "开发模式运行时不可用。"
+        case .notFound: return Bundle.main.bundleURL.pathExtension == "app" ? "" : "开发模式运行时不可用。"
         default: return ""
         }
     }

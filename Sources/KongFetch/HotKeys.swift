@@ -8,7 +8,8 @@ struct Shortcut: Codable, Equatable {
     /// The key's label at recording time, e.g. "V" or "空格".
     var keyLabel: String
 
-    static let defaultSearch = Shortcut(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(cmdKey | optionKey), keyLabel: "空格")
+    // ⌘⌥Space is taken by Finder's search window and ⌃⌥Space by the input-source switch, so default to ⌃⌥F.
+    static let defaultSearch = Shortcut(keyCode: UInt32(kVK_ANSI_F), carbonModifiers: UInt32(controlKey | optionKey), keyLabel: "F")
     static let defaultClipboard = Shortcut(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(controlKey | optionKey), keyLabel: "V")
 
     var display: String {
@@ -76,11 +77,13 @@ final class HotKeyCenter {
 
     private init() {}
 
-    /// Returns false if the combination is already taken by another app.
+    /// Returns false if the combination is already taken by macOS or another app.
     @discardableResult
     func register(_ shortcut: Shortcut?, for slot: Slot, action: @escaping () -> Void) -> Bool {
         unregister(slot)
         guard let shortcut else { return true }
+        // macOS's own shortcuts (Spotlight, Finder search, input sources…) win over ours, so refuse them.
+        guard !Self.isSystemShortcut(shortcut) else { return false }
         installHandlerIfNeeded()
         var registration = Registration(shortcut: shortcut, ref: nil, action: action)
         if !isSuspended {
@@ -118,6 +121,21 @@ final class HotKeyCenter {
                 registrations[slot]?.ref = registerCarbon(shortcut, slot: slot)
             }
         }
+    }
+
+    /// Whether an enabled macOS keyboard shortcut (System Settings › Keyboard › Shortcuts) uses this combination.
+    static func isSystemShortcut(_ shortcut: Shortcut) -> Bool {
+        var unmanaged: Unmanaged<CFArray>?
+        guard CopySymbolicHotKeys(&unmanaged) == noErr,
+              let entries = unmanaged?.takeRetainedValue() as? [[String: Any]] else { return false }
+        let mask = UInt32(cmdKey | optionKey | controlKey | shiftKey)
+        for entry in entries {
+            guard (entry["kHISymbolicHotKeyEnabled"] as? NSNumber)?.boolValue == true,
+                  let code = (entry["kHISymbolicHotKeyCode"] as? NSNumber)?.uint32Value,
+                  let modifiers = (entry["kHISymbolicHotKeyModifiers"] as? NSNumber)?.uint32Value else { continue }
+            if code == shortcut.keyCode && modifiers & mask == shortcut.carbonModifiers & mask { return true }
+        }
+        return false
     }
 
     fileprivate func fire(_ id: UInt32) {

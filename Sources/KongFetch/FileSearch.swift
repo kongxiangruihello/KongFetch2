@@ -302,7 +302,7 @@ final class FileSearchCoordinator {
         var byPath: [String: SearchResult] = [:]
 
         func allowed(_ path: String) -> Bool {
-            if hideLibrary && (path.hasPrefix(home + "/Library/") || path.contains("/.")) { return false }
+            if hideLibrary && Ranker.isSystemLocation(path, home: home) { return false }
             return !excludedPrefixes.contains { path == $0 || path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
         }
 

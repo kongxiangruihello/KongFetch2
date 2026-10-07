@@ -97,6 +97,20 @@ final class RankingTests: XCTestCase {
         XCTAssertEqual(Ranker.locationPenalty(path: "/Users/k/Documents/a.pdf", home: home), 0)
         XCTAssertGreaterThan(Ranker.locationPenalty(path: "/Users/k/Library/Caches/a.pdf", home: home), 0)
         XCTAssertGreaterThan(Ranker.locationPenalty(path: "/Users/k/.Trash/a.pdf", home: home), 0)
+        XCTAssertEqual(Ranker.locationPenalty(path: "/Users/k/Library/Mobile Documents/com~apple~CloudDocs/a.pdf", home: home), 0)
+    }
+
+    func testSystemLocations() {
+        let home = "/Users/k"
+        XCTAssertFalse(Ranker.isSystemLocation("/Users/k/Documents/论语.docx", home: home))
+        XCTAssertFalse(Ranker.isSystemLocation("/Users/k/Library/Mobile Documents/com~apple~CloudDocs/论语.docx", home: home))
+        XCTAssertFalse(Ranker.isSystemLocation("/Users/k/Library/CloudStorage/GoogleDrive-a/讲稿.docx", home: home))
+        XCTAssertFalse(Ranker.isSystemLocation("/Applications/Safari.app", home: home))
+        XCTAssertFalse(Ranker.isSystemLocation("/System/Applications/Notes.app", home: home))
+        XCTAssertTrue(Ranker.isSystemLocation("/Users/k/Library/Caches/x", home: home))
+        XCTAssertTrue(Ranker.isSystemLocation("/Library/Developer/CommandLineTools/Safari.framework", home: home))
+        XCTAssertTrue(Ranker.isSystemLocation("/Applications/Xcode.app/Contents/Info.plist", home: home))
+        XCTAssertTrue(Ranker.isSystemLocation("/Users/k/.Trash/a.pdf", home: home))
     }
 
     func testRecentItemsBoost() throws {

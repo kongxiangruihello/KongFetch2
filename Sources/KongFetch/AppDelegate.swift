@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var clipboardHistory: ClipboardHistory!
     private var settingsWindow: SettingsWindowController?
     private var subscriptions = Set<AnyCancellable>()
+    private var folderAccessCache: (checked: Date, state: [String: Bool], fullDisk: Bool)?
 
     static var supportDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -47,6 +48,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         status.provider = { [weak self] in self?.makeSnapshot() ?? AppStatus.Snapshot() }
         observePreferences()
         offerToQuitLegacyVersion()
+
+        searchPanel.accessHint = { [weak self] in self?.folderAccessHint() }
+        if !preferences.folderAccessRequested {
+            // Ask now so Spotlight results from Documents, Desktop, Downloads and iCloud Drive are not hidden.
+            requestFolderAccess()
+        }
 
         if !preferences.hasCompletedFirstLaunch {
             preferences.hasCompletedFirstLaunch = true
@@ -211,7 +218,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self?.status.refresh()
                 },
                 clearClipboard: { [weak self] includingPinned in self?.clipboardHistory.clear(includingPinned: includingPinned); self?.status.refresh() },
-                revealDataFolder: { NSWorkspace.shared.activateFileViewerSelecting([AppDelegate.supportDirectory.appendingPathComponent("Clipboard")]) }
+                revealDataFolder: { NSWorkspace.shared.activateFileViewerSelecting([AppDelegate.supportDirectory.appendingPathComponent("Clipboard")]) },
+                requestFolderAccess: { [weak self] in self?.requestFolderAccess() }
             )
             settingsWindow = SettingsWindowController(preferences: preferences, status: status, actions: actions)
         }
@@ -235,7 +243,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.bundlePath = Bundle.main.bundleURL.path
         s.clipboardCount = clipboardHistory.items.count
         s.clipboardBytes = clipboardHistory.totalBytes
+        let access = folderAccessState()
+        s.folderAccess = access.state
+        s.fullDiskAccess = access.fullDisk
         return s
+    }
+
+    // MARK: Folder access
+
+    private func requestFolderAccess() {
+        preferences.folderAccessRequested = true
+        let state = FolderAccess.requestAll()
+        folderAccessCache = (Date(), state, FolderAccess.hasFullDiskAccess)
+        status.refresh()
+    }
+
+    /// Cached for a few seconds: listing the folders every second while Settings is open is wasteful.
+    private func folderAccessState() -> (state: [String: Bool], fullDisk: Bool) {
+        guard preferences.folderAccessRequested else { return ([:], FolderAccess.hasFullDiskAccess) }
+        if let cache = folderAccessCache, Date().timeIntervalSince(cache.checked) < 5 { return (cache.state, cache.fullDisk) }
+        let state = FolderAccess.currentState()
+        let fullDisk = FolderAccess.hasFullDiskAccess
+        folderAccessCache = (Date(), state, fullDisk)
+        return (state, fullDisk)
+    }
+
+    /// Shown in the search panel when nothing is found and some folders are off limits.
+    private func folderAccessHint() -> String? {
+        let access = folderAccessState()
+        guard !access.fullDisk else { return nil }
+        let denied = FolderAccess.folders.filter { access.state[$0.id] == false }.map(\.title)
+        guard !denied.isEmpty else { return nil }
+        return "未授权访问“\(denied.joined(separator: "、"))”，其中的文件搜不到（⌘, 打开设置）"
     }
 }
 

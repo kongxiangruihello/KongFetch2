@@ -104,8 +104,27 @@ public enum Ranker {
         let depth = path.split(separator: "/").count
         if depth > 7 { penalty += (depth - 7) * 12 }
         if path.contains("/.") { penalty += 300 }
-        if path.hasPrefix(home + "/Library/") || path.hasPrefix("/Library/") || path.hasPrefix("/System/Library/") { penalty += 200 }
+        if !isCloudDrive(path, home: home),
+           path.hasPrefix(home + "/Library/") || path.hasPrefix("/Library/") || path.hasPrefix("/System/Library/") {
+            penalty += 200
+        }
         if path.contains("/node_modules/") || path.contains("/DerivedData/") || path.contains(".build/") { penalty += 250 }
         return penalty
+    }
+
+    /// iCloud Drive and third-party cloud drives live under ~/Library but hold the user's own files.
+    public static func isCloudDrive(_ path: String, home: String) -> Bool {
+        path.hasPrefix(home + "/Library/Mobile Documents/") || path.hasPrefix(home + "/Library/CloudStorage/")
+    }
+
+    /// System and support locations hidden unless the user asks for them:
+    /// ~/Library (except cloud drives), hidden folders, system folders, and the insides of apps and frameworks.
+    public static func isSystemLocation(_ path: String, home: String) -> Bool {
+        if path.contains("/.") { return true }
+        if path.contains(".app/") || path.contains(".framework/") || path.contains(".bundle/") || path.contains(".xcodeproj/") { return true }
+        if path.hasPrefix(home + "/Library/") { return !isCloudDrive(path, home: home) }
+        if path.hasPrefix("/System/Applications/") || path.hasPrefix("/System/Library/CoreServices/Applications/") { return false }
+        let systemRoots = ["/Library/", "/System/", "/usr/", "/private/", "/opt/", "/bin/", "/sbin/", "/cores/", "/Volumes/Recovery/"]
+        return systemRoots.contains { path.hasPrefix($0) }
     }
 }
