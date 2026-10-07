@@ -29,6 +29,9 @@ class FloatingPanel: NSPanel {
         isOpaque = false
         hasShadow = true
         animationBehavior = .utilityWindow
+        // Fixed size: content (e.g. a large image) must not stretch the panel.
+        contentMinSize = size
+        contentMaxSize = size
 
         effectView.material = .popover
         effectView.blendingMode = .behindWindow

@@ -311,7 +311,11 @@ final class FileSearchCoordinator {
             let nameScore = [Ranker.nameScore(name: hit.displayName, needles: query.nameNeedles),
                              Ranker.nameScore(name: hit.fileName, needles: query.nameNeedles)].compactMap { $0 }.max() ?? 0
             var score = nameScore - Ranker.locationPenalty(path: hit.path, home: home) + recents.boost(for: hit.path)
-            if hit.contentType == "com.apple.application-bundle" && query.kind == nil { score += 150 }
+            if hit.contentType == "com.apple.application-bundle" && query.kind == nil {
+                // Installed apps first; copies inside build folders and disk images barely count.
+                let installed = ["/Applications/", "/System/Applications/", home + "/Applications/"].contains { hit.path.hasPrefix($0) }
+                score += installed ? 200 : 20
+            }
             byPath[hit.path] = SearchResult(url: URL(fileURLWithPath: hit.path), displayName: hit.displayName, fileName: hit.fileName,
                                             contentType: hit.contentType, modified: hit.modified, size: hit.size, score: score)
         }

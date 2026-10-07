@@ -80,6 +80,9 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         pauseButton.action = #selector(togglePause)
         pauseButton.translatesAutoresizingMaskIntoConstraints = false
 
+        textPreview.frame = NSRect(x: 0, y: 0, width: 380, height: 300)
+        textPreview.minSize = NSSize(width: 0, height: 0)
+        textPreview.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textPreview.isEditable = false
         textPreview.isSelectable = true
         textPreview.drawsBackground = false
@@ -96,6 +99,11 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         textScroll.translatesAutoresizingMaskIntoConstraints = false
         imagePreview.imageScaling = .scaleProportionallyDown
         imagePreview.translatesAutoresizingMaskIntoConstraints = false
+        // An image's natural size must never grow the window.
+        for orientation in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+            imagePreview.setContentCompressionResistancePriority(.init(1), for: orientation)
+            imagePreview.setContentHuggingPriority(.init(1), for: orientation)
+        }
         detailLabel.alignment = .center
 
         hintLabel.alignment = .right
@@ -250,7 +258,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         case .files:
             textScroll.isHidden = false
             imagePreview.isHidden = true
-            textPreview.string = (item.filePaths ?? []).map { ($0 as NSString).abbreviatingWithTildeInPath }.joined(separator: "\n")
+            textPreview.string = (item.filePaths ?? []).map { PathDisplay.pretty($0, home: NSHomeDirectory()) }.joined(separator: "\n")
             let missing = (item.filePaths ?? []).filter { !FileManager.default.fileExists(atPath: $0) }.count
             if missing > 0 { details.append("\(missing) 个文件已不存在") }
         case .image:

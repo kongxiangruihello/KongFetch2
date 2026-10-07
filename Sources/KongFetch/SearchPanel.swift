@@ -18,6 +18,9 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private var results: [SearchResult] = []
     private var showingRecents = false
+    /// True once the user picks a row with the arrows or the mouse; until then the top result stays selected
+    /// while Spotlight streams in more results.
+    private var userChoseRow = false
     private var pendingSearch: DispatchWorkItem?
     private var quickLookOpen = false
 
@@ -164,6 +167,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func runSearch(_ text: String) {
+        userChoseRow = false
         if text.trimmingCharacters(in: .whitespaces).isEmpty {
             coordinator.cancel()
             spinner.stopAnimation(nil)
@@ -197,7 +201,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func setResults(_ newResults: [SearchResult]) {
-        let previous = selectedResult?.path
+        let previous = userChoseRow ? selectedResult?.path : nil
         results = newResults
         table.reloadData()
         let index = previous.flatMap { path in results.firstIndex { $0.path == path } } ?? 0
@@ -260,6 +264,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         guard !results.isEmpty else { return }
         let current = table.selectedRow < 0 ? (delta > 0 ? -1 : results.count) : table.selectedRow
         let next = max(0, min(results.count - 1, current + delta))
+        userChoseRow = true
         table.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         table.scrollRowToVisible(next)
     }
@@ -368,12 +373,13 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         cell.icon.image = NSWorkspace.shared.icon(forFile: result.path)
         cell.title.stringValue = result.displayName
         let parent = (result.path as NSString).deletingLastPathComponent
-        cell.subtitle.stringValue = (parent as NSString).abbreviatingWithTildeInPath
+        cell.subtitle.stringValue = PathDisplay.pretty(parent, home: NSHomeDirectory())
         cell.badge.stringValue = row < 9 ? "⌘\(row + 1)" : ""
         return cell
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        if NSApp.currentEvent?.type == .leftMouseDown || NSApp.currentEvent?.type == .leftMouseUp { userChoseRow = true }
         updatePreview()
         if quickLookOpen, QLPreviewPanel.sharedPreviewPanelExists() { QLPreviewPanel.shared()?.reloadData() }
     }
@@ -445,7 +451,7 @@ final class FilePreviewView: NSView {
             lines.append("大小：" + ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
         }
         if let modified = values?.contentModificationDate ?? result.modified { lines.append("修改：\(modified.shortDescription)") }
-        lines.append("位置：" + ((url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath))
+        lines.append("位置：" + PathDisplay.pretty(url.deletingLastPathComponent().path, home: NSHomeDirectory()))
         detailLabel.stringValue = lines.joined(separator: "\n")
 
         let scale = window?.backingScaleFactor ?? 2
