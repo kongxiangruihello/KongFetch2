@@ -197,12 +197,10 @@ final class Updater {
     private func backupRunningApp() throws {
         let fm = FileManager.default
         try fm.createDirectory(at: backupsURL, withIntermediateDirectories: true)
-        let info = Bundle.main.infoDictionary
-        let name = "KongFetch-\(info?["CFBundleShortVersionString"] as? String ?? "?")-\(info?["CFBundleVersion"] as? String ?? "?").app"
-        let target = backupsURL.appendingPathComponent(name)
+        let target = backupsURL.appendingPathComponent(Self.runningBackupName)
         if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
         try step(run("/usr/bin/ditto", [Bundle.main.bundleURL.path, target.path], "/"), "备份失败")
-        // Keep the two most recent backups.
+        // Keep the two most recent earlier versions (plus the one just backed up).
         for old in listBackups().dropFirst(2) { try? fm.removeItem(at: backupsURL.appendingPathComponent(old)) }
         set { $0.backups = self.listBackups() }
     }
@@ -241,13 +239,25 @@ final class Updater {
         DispatchQueue.main.async { NSApp.terminate(nil) }
     }
 
+    /// Backup name of the running copy, e.g. "KongFetch-4.3.2-14.app".
+    private static var runningBackupName: String {
+        let info = Bundle.main.infoDictionary
+        return "KongFetch-\(info?["CFBundleShortVersionString"] as? String ?? "?")-\(info?["CFBundleVersion"] as? String ?? "?").app"
+    }
+
+    /// Backups other than the version that is running now (after a rollback the backup of the
+    /// running version is still there, and reinstalling it would change nothing), newest build first.
     private func listBackups() -> [String] {
         let fm = FileManager.default
         let names = (try? fm.contentsOfDirectory(atPath: backupsURL.path))?.filter { $0.hasSuffix(".app") } ?? []
-        return names.sorted { a, b in
-            let da = (try? fm.attributesOfItem(atPath: backupsURL.appendingPathComponent(a).path)[.modificationDate] as? Date) ?? .distantPast
-            let db = (try? fm.attributesOfItem(atPath: backupsURL.appendingPathComponent(b).path)[.modificationDate] as? Date) ?? .distantPast
-            return da > db
+        func build(_ name: String) -> Int {
+            Int(name.dropLast(4).split(separator: "-").last ?? "") ?? 0
+        }
+        func modified(_ name: String) -> Date {
+            (try? fm.attributesOfItem(atPath: backupsURL.appendingPathComponent(name).path)[.modificationDate] as? Date) ?? .distantPast
+        }
+        return names.filter { $0 != Self.runningBackupName }.sorted { a, b in
+            build(a) != build(b) ? build(a) > build(b) : modified(a) > modified(b)
         }
     }
 
