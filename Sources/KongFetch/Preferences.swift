@@ -15,6 +15,9 @@ final class Preferences: ObservableObject {
 
     @Published var excludedPathPrefixes: [String] { didSet { defaults.set(excludedPathPrefixes, forKey: key("excludedPathPrefixes")) } }
     @Published var includeLibraryFolders: Bool { didSet { defaults.set(includeLibraryFolders, forKey: key("includeLibraryFolders")) } }
+    /// Keep a pinyin index of file names in Documents, Desktop, Downloads, iCloud Drive and the extra folders.
+    @Published var pinyinIndexEnabled: Bool { didSet { defaults.set(pinyinIndexEnabled, forKey: key("pinyinIndexEnabled")) } }
+    @Published var pinyinIndexExtraRoots: [String] { didSet { defaults.set(pinyinIndexExtraRoots, forKey: key("pinyinIndexExtraRoots")) } }
 
     @Published var clipboardEnabled: Bool { didSet { defaults.set(clipboardEnabled, forKey: key("clipboardEnabled")) } }
     @Published var clipboardPaused: Bool { didSet { defaults.set(clipboardPaused, forKey: key("clipboardPaused")) } }
@@ -42,6 +45,8 @@ final class Preferences: ObservableObject {
         doubleTapModifier = TapModifier(rawValue: value("doubleTapModifier", "control")) ?? .control
         excludedPathPrefixes = value("excludedPathPrefixes", [String]())
         includeLibraryFolders = value("includeLibraryFolders", false)
+        pinyinIndexEnabled = value("pinyinIndexEnabled", true)
+        pinyinIndexExtraRoots = value("pinyinIndexExtraRoots", [String]())
         clipboardEnabled = value("clipboardEnabled", false)
         clipboardPaused = value("clipboardPaused", false)
         clipboardRetentionDays = value("clipboardRetentionDays", 30)

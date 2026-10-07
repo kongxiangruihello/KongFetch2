@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsWindow: SettingsWindowController?
     private var subscriptions = Set<AnyCancellable>()
     private var folderAccessCache: (checked: Date, state: [String: Bool], fullDisk: Bool)?
+    private var pinyinIndex: PinyinIndexService!
 
     static var supportDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -34,7 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clipboardHistory = ClipboardHistory(store: ClipboardStore(directory: support.appendingPathComponent("Clipboard", isDirectory: true)),
                                             limits: preferences.clipboardLimits)
         clipboardMonitor = ClipboardMonitor(history: clipboardHistory, preferences: preferences)
-        searchPanel = SearchPanelController(coordinator: FileSearchCoordinator(recents: recents, preferences: preferences))
+        pinyinIndex = PinyinIndexService(cacheURL: support.appendingPathComponent("pinyin-index.txt"))
+        pinyinIndex.onChange = { [weak self] in self?.status.refresh() }
+        searchPanel = SearchPanelController(coordinator: FileSearchCoordinator(recents: recents, preferences: preferences,
+                                                                               pinyinIndex: pinyinIndex.index))
         clipboardPanel = ClipboardPanelController(monitor: clipboardMonitor, preferences: preferences)
         searchPanel.openSettings = { [weak self] in self?.openSettings() }
         clipboardPanel.openSettings = { [weak self] in self?.openSettings() }
@@ -53,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !preferences.folderAccessRequested {
             // Ask now so Spotlight results from Documents, Desktop, Downloads and iCloud Drive are not hidden.
             requestFolderAccess()
+        } else {
+            restartPinyinIndex()
         }
 
         if !preferences.hasCompletedFirstLaunch {
@@ -124,6 +130,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         preferences.$clipboardRetentionDays.combineLatest(preferences.$clipboardMaximumItems).dropFirst().sink { [weak self] days, count in
             self?.clipboardHistory.limits = ClipboardHistory.Limits(maximumItems: max(20, min(count, 2000)), retentionDays: days > 0 ? days : nil)
         }.store(in: &subscriptions)
+        preferences.$pinyinIndexEnabled.combineLatest(preferences.$pinyinIndexExtraRoots).dropFirst()
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .sink { [weak self] _, _ in self?.restartPinyinIndex() }
+            .store(in: &subscriptions)
         preferences.$clipboardEnabled.dropFirst().sink { [weak self] enabled in
             if enabled { self?.clipboardMonitor.skipCurrentContents() }
         }.store(in: &subscriptions)
@@ -219,7 +229,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 },
                 clearClipboard: { [weak self] includingPinned in self?.clipboardHistory.clear(includingPinned: includingPinned); self?.status.refresh() },
                 revealDataFolder: { NSWorkspace.shared.activateFileViewerSelecting([AppDelegate.supportDirectory.appendingPathComponent("Clipboard")]) },
-                requestFolderAccess: { [weak self] in self?.requestFolderAccess() }
+                requestFolderAccess: { [weak self] in self?.requestFolderAccess() },
+                rebuildPinyinIndex: { [weak self] in self?.pinyinIndex.rebuild(); self?.status.refresh() }
             )
             settingsWindow = SettingsWindowController(preferences: preferences, status: status, actions: actions)
         }
@@ -246,7 +257,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let access = folderAccessState()
         s.folderAccess = access.state
         s.fullDiskAccess = access.fullDisk
+        s.pinyinIndexCount = pinyinIndex.index.count
+        s.pinyinIndexScanning = pinyinIndex.isScanning
+        s.pinyinIndexUpdated = pinyinIndex.lastCompleted
+        s.pinyinIndexRoots = pinyinRoots()
         return s
+    }
+
+    // MARK: Pinyin index
+
+    /// Allowed default folders plus the user's extra folders, or nothing when the index is off.
+    private func pinyinRoots() -> [String] {
+        guard preferences.pinyinIndexEnabled else { return [] }
+        let access = folderAccessState()
+        var roots = FolderAccess.folders.filter { access.fullDisk || access.state[$0.id] == true }.map(\.url.path)
+        for extra in preferences.pinyinIndexExtraRoots {
+            let path = (extra as NSString).expandingTildeInPath
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue,
+               !roots.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+                roots.append(path)
+            }
+        }
+        return roots
+    }
+
+    private func restartPinyinIndex() {
+        pinyinIndex.start(roots: pinyinRoots())
     }
 
     // MARK: Folder access
@@ -255,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         preferences.folderAccessRequested = true
         let state = FolderAccess.requestAll()
         folderAccessCache = (Date(), state, FolderAccess.hasFullDiskAccess)
+        restartPinyinIndex()
         status.refresh()
     }
 

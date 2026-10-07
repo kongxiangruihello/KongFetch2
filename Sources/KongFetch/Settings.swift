@@ -24,6 +24,10 @@ final class AppStatus: ObservableObject {
         /// Folder id → allowed. Empty until access has been requested once.
         var folderAccess: [String: Bool] = [:]
         var fullDiskAccess = false
+        var pinyinIndexCount = 0
+        var pinyinIndexScanning = false
+        var pinyinIndexUpdated: Date?
+        var pinyinIndexRoots: [String] = []
     }
 
     @Published private(set) var snapshot = Snapshot()
@@ -56,6 +60,7 @@ struct SettingsActions {
     var clearClipboard: (_ includingPinned: Bool) -> Void
     var revealDataFolder: () -> Void
     var requestFolderAccess: () -> Void
+    var rebuildPinyinIndex: () -> Void
 }
 
 struct SettingsView: View {
@@ -166,6 +171,40 @@ private struct SearchSettings: View {
                         .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+            Section("拼音索引") {
+                Toggle("为文件名建立拼音索引（全拼、首字母均可，如 lyyz → 论语译注）", isOn: $preferences.pinyinIndexEnabled)
+                if preferences.pinyinIndexEnabled {
+                    HStack {
+                        if status.snapshot.pinyinIndexScanning {
+                            ProgressView().controlSize(.small)
+                            Text("正在扫描… 已收录 \(status.snapshot.pinyinIndexCount) 个中文名称").foregroundColor(.secondary)
+                        } else {
+                            Text("已收录 \(status.snapshot.pinyinIndexCount) 个中文名称" +
+                                 (status.snapshot.pinyinIndexUpdated.map { " · 更新于 \($0.shortDescription)" } ?? ""))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Button("重建") { actions.rebuildPinyinIndex() }
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(status.snapshot.pinyinIndexRoots, id: \.self) { root in
+                            Text(PathDisplay.pretty(root, home: NSHomeDirectory())).font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                    if !preferences.pinyinIndexExtraRoots.isEmpty {
+                        ForEach(preferences.pinyinIndexExtraRoots, id: \.self) { root in
+                            HStack {
+                                Text(PathDisplay.pretty((root as NSString).expandingTildeInPath, home: NSHomeDirectory()))
+                                Spacer()
+                                Button("移除") { preferences.pinyinIndexExtraRoots.removeAll { $0 == root } }
+                            }
+                        }
+                    }
+                    Button("添加其他文件夹…") { addIndexFolders() }
+                    Text("只记录含中文的文件名，保存在本机；文件增删改名后自动更新。文稿、桌面、下载和 iCloud 云盘需先在上方授权。")
+                        .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Section("范围") {
                 Toggle("包含系统文件夹、“资源库”、隐藏文件夹和应用内部文件", isOn: $preferences.includeLibraryFolders)
                 VStack(alignment: .leading, spacing: 6) {
@@ -194,6 +233,22 @@ private struct SearchSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func addIndexFolders() {
+        let panel = NSOpenPanel()
+        panel.title = "选择要建立拼音索引的文件夹"
+        panel.prompt = "添加"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        var list = preferences.pinyinIndexExtraRoots
+        for url in panel.urls {
+            let path = (url.path as NSString).abbreviatingWithTildeInPath
+            if !list.contains(path) { list.append(path) }
+        }
+        preferences.pinyinIndexExtraRoots = list
     }
 }
 

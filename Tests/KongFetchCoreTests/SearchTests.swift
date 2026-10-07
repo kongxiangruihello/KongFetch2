@@ -44,7 +44,8 @@ final class SearchQueryTests: XCTestCase {
     func testPinyinCandidate() {
         XCTAssertEqual(SearchQuery.parse("WeiXin").pinyinCandidate, "weixin")
         XCTAssertNil(SearchQuery.parse("wei xin").pinyinCandidate)
-        XCTAssertNil(SearchQuery.parse("ht ext:pdf").pinyinCandidate)
+        XCTAssertEqual(SearchQuery.parse("ht ext:pdf").pinyinCandidate, "ht")
+        XCTAssertNil(SearchQuery.parse("ht days:3").pinyinCandidate)
         XCTAssertNil(SearchQuery.parse("合同").pinyinCandidate)
     }
 

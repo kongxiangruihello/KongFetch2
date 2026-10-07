@@ -15,6 +15,9 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     private let statusLabel = makeFooterLabel()
     private let hintLabel = makeFooterLabel()
     private let spinner = NSProgressIndicator()
+    private let modeButton = NSButton(title: "名称", target: nil, action: nil)
+    /// Search inside files instead of names only. Toggled with Tab.
+    private var contentMode = false
 
     private var results: [SearchResult] = []
     private var showingRecents = false
@@ -109,16 +112,25 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         divider.translatesAutoresizingMaskIntoConstraints = false
         preview.translatesAutoresizingMaskIntoConstraints = false
         hintLabel.alignment = .right
-        hintLabel.stringValue = "↩ 打开   ⌘↩ 在访达中显示   ⌘Y 快速查看   ⌘C 拷贝文件   ⌥⌘C 拷贝路径"
+        hintLabel.stringValue = "⇥ 名称/全文   ↩ 打开   ⌘↩ 在访达中显示   ⌘Y 快速查看   ⌘C 拷贝   ⌥⌘C 拷贝路径"
 
-        for view in [magnifier, field, spinner, topLine, scroll, divider, preview, bottomLine, statusLabel, hintLabel] as [NSView] {
+        modeButton.bezelStyle = .inline
+        modeButton.controlSize = .small
+        modeButton.target = self
+        modeButton.action = #selector(toggleMode)
+        modeButton.toolTip = "切换按名称或按内容搜索（Tab）"
+        modeButton.translatesAutoresizingMaskIntoConstraints = false
+
+        for view in [magnifier, field, modeButton, spinner, topLine, scroll, divider, preview, bottomLine, statusLabel, hintLabel] as [NSView] {
             content.addSubview(view)
         }
         NSLayoutConstraint.activate([
             magnifier.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             magnifier.centerYAnchor.constraint(equalTo: field.centerYAnchor),
             field.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: 10),
-            field.trailingAnchor.constraint(equalTo: spinner.leadingAnchor, constant: -8),
+            field.trailingAnchor.constraint(equalTo: modeButton.leadingAnchor, constant: -8),
+            modeButton.trailingAnchor.constraint(equalTo: spinner.leadingAnchor, constant: -8),
+            modeButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
             field.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
             field.heightAnchor.constraint(equalToConstant: 30),
             spinner.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
@@ -176,7 +188,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         }
         showingRecents = false
         spinner.startAnimation(nil)
-        coordinator.search(text) { [weak self] results, finished in
+        coordinator.search(text, content: contentMode) { [weak self] results, finished in
             guard let self else { return }
             self.setResults(results)
             if finished {
@@ -226,6 +238,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         case #selector(NSResponder.pageDown(_:)), #selector(NSResponder.scrollPageDown(_:)): moveSelection(by: 8); return true
         case #selector(NSResponder.pageUp(_:)), #selector(NSResponder.scrollPageUp(_:)): moveSelection(by: -8); return true
         case #selector(NSResponder.insertNewline(_:)): openSelected(); return true
+        case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)): toggleMode(); return true
         case #selector(NSResponder.cancelOperation(_:)):
             if field.stringValue.isEmpty { hide() } else { field.stringValue = ""; runSearch("") }
             return true
@@ -388,8 +401,18 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         results.indices.contains(row) ? results[row].url as NSURL : nil
     }
 
+    @objc private func toggleMode() {
+        contentMode.toggle()
+        modeButton.title = contentMode ? "全文" : "名称"
+        field.placeholderString = contentMode ? "搜索文件内容（PDF、Word、Pages、文本……）" : "搜索文件、文件夹和应用"
+        panel.makeFirstResponder(field)
+        field.currentEditor()?.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
+        runSearch(field.stringValue)
+    }
+
     private func updatePreview() {
-        preview.show(selectedResult)
+        let needles = contentMode && !showingRecents ? SearchQuery.parse(field.stringValue).nameNeedles : []
+        preview.show(selectedResult, needles: needles)
     }
 }
 
@@ -398,7 +421,10 @@ final class FilePreviewView: NSView {
     private let imageView = NSImageView()
     private let nameLabel = NSTextField(wrappingLabelWithString: "")
     private let detailLabel = NSTextField(wrappingLabelWithString: "")
+    private let snippetLabel = NSTextField(wrappingLabelWithString: "")
     private var currentPath: String?
+    private var currentNeedles: [String] = []
+    private static let snippetQueue = DispatchQueue(label: "KongFetch.snippet", qos: .userInitiated)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -409,7 +435,11 @@ final class FilePreviewView: NSView {
         detailLabel.font = .systemFont(ofSize: 11.5)
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.isSelectable = true
-        for view in [imageView, nameLabel, detailLabel] {
+        snippetLabel.font = .systemFont(ofSize: 12)
+        snippetLabel.maximumNumberOfLines = 7
+        snippetLabel.lineBreakMode = .byTruncatingTail
+        snippetLabel.isSelectable = true
+        for view in [imageView, nameLabel, detailLabel, snippetLabel] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -424,22 +454,29 @@ final class FilePreviewView: NSView {
             detailLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 12),
             detailLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
             detailLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
-            detailLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -12)
+            snippetLabel.topAnchor.constraint(equalTo: detailLabel.bottomAnchor, constant: 10),
+            snippetLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            snippetLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
+            snippetLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -12)
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    func show(_ result: SearchResult?) {
+    /// `needles` are the content-search words; when given, a passage containing them is shown.
+    func show(_ result: SearchResult?, needles: [String] = []) {
         guard let result else {
             currentPath = nil
             imageView.image = nil
             nameLabel.stringValue = ""
             detailLabel.stringValue = ""
+            snippetLabel.stringValue = ""
             return
         }
-        guard result.path != currentPath else { return }
+        guard result.path != currentPath || needles != currentNeedles else { return }
         currentPath = result.path
+        currentNeedles = needles
+        showSnippet(for: result.url, needles: needles)
         imageView.image = NSWorkspace.shared.icon(forFile: result.path)
         nameLabel.stringValue = result.displayName
 
@@ -462,6 +499,43 @@ final class FilePreviewView: NSView {
             DispatchQueue.main.async {
                 guard let self, self.currentPath == path else { return }
                 self.imageView.image = thumbnail.nsImage
+            }
+        }
+    }
+
+    private func showSnippet(for url: URL, needles: [String]) {
+        snippetLabel.stringValue = ""
+        guard !needles.isEmpty else { return }
+        snippetLabel.stringValue = "正在查找文中位置…"
+        snippetLabel.textColor = .tertiaryLabelColor
+        let path = url.path
+        Self.snippetQueue.async { [weak self] in
+            let outcome = ContentPreview.find(in: url, needles: needles)
+            DispatchQueue.main.async {
+                guard let self, self.currentPath == path, self.currentNeedles == needles else { return }
+                self.snippetLabel.textColor = .labelColor
+                switch outcome {
+                case .found(let found):
+                    let text = NSMutableAttributedString(string: found.snippet.text, attributes: [
+                        .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.labelColor
+                    ])
+                    text.addAttributes([.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.45),
+                                        .font: NSFont.systemFont(ofSize: 12, weight: .semibold)], range: found.snippet.highlight)
+                    if let page = found.page {
+                        text.insert(NSAttributedString(string: "第 \(page) 页：", attributes: [
+                            .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor
+                        ]), at: 0)
+                    }
+                    self.snippetLabel.attributedStringValue = text
+                case .notFound:
+                    self.snippetLabel.textColor = .secondaryLabelColor
+                    self.snippetLabel.stringValue = "匹配可能在文件名、元数据或无法直接读取的内容中。"
+                case .notDownloaded:
+                    self.snippetLabel.textColor = .secondaryLabelColor
+                    self.snippetLabel.stringValue = "iCloud 文件尚未下载到本机，打开后可查看匹配位置。"
+                case .unsupported:
+                    self.snippetLabel.stringValue = ""
+                }
             }
         }
     }

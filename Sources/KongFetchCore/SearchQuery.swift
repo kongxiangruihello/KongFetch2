@@ -54,12 +54,10 @@ public struct SearchQuery: Equatable {
         terms.isEmpty && phrases.isEmpty && extensions.isEmpty && kind == nil && modifiedWithinDays == nil
     }
 
-    /// A single bare ASCII word with no filters: may be pinyin for a Chinese name.
+    /// A single bare ASCII word (filters allowed): may be pinyin for a Chinese name.
     public var pinyinCandidate: String? {
-        guard phrases.isEmpty, excluded.isEmpty, extensions.isEmpty, modifiedWithinDays == nil,
-              kind == nil || kind == .application,
-              terms.count == 1, let word = terms.first,
-              word.count >= 1, word.allSatisfy({ $0.isASCII && $0.isLetter }) else { return nil }
+        guard phrases.isEmpty, modifiedWithinDays == nil, terms.count == 1, let word = terms.first,
+              word.allSatisfy({ $0.isASCII && $0.isLetter }) else { return nil }
         return word.lowercased()
     }
 

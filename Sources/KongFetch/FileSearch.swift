@@ -25,6 +25,8 @@ final class SpotlightSearch: NSObject {
         var contentType: String?
         var modified: Date?
         var size: Int?
+        /// Spotlight's content relevance (0…1), only for content searches.
+        var relevance: Double?
     }
 
     /// Spotlight can match hundreds of thousands of items for short queries; only this many are ranked.
@@ -34,9 +36,9 @@ final class SpotlightSearch: NSObject {
     private var completion: (([Hit], Bool) -> Void)?
 
     /// Calls `completion` with partial results while gathering, then once with `finished == true`.
-    func search(_ input: SearchQuery, completion: @escaping ([Hit], Bool) -> Void) {
+    func search(_ input: SearchQuery, content: Bool = false, completion: @escaping ([Hit], Bool) -> Void) {
         stop()
-        guard let predicate = Self.predicate(for: input) else {
+        guard let predicate = content ? Self.contentPredicate(for: input) : Self.predicate(for: input) else {
             completion([], true)
             return
         }
@@ -92,7 +94,8 @@ final class SpotlightSearch: NSObject {
                             fileName: fileName,
                             contentType: item.value(forAttribute: NSMetadataItemContentTypeKey) as? String,
                             modified: item.value(forAttribute: NSMetadataItemFSContentChangeDateKey) as? Date,
-                            size: (item.value(forAttribute: NSMetadataItemFSSizeKey) as? NSNumber)?.intValue))
+                            size: (item.value(forAttribute: NSMetadataItemFSSizeKey) as? NSNumber)?.intValue,
+                            relevance: (item.value(forAttribute: NSMetadataQueryResultContentRelevanceAttribute) as? NSNumber)?.doubleValue))
         }
         return hits
     }
@@ -123,6 +126,49 @@ final class SpotlightSearch: NSObject {
         // Exclusions are applied locally after the query.
         guard !parts.isEmpty else { return nil }
         return parts.count == 1 ? parts[0] : NSCompoundPredicate(andPredicateWithSubpredicates: parts)
+    }
+
+    /// Matches words in the file's text (or its name), like Finder's "contents" search.
+    static func contentPredicate(for input: SearchQuery) -> NSPredicate? {
+        let needles = input.nameNeedles.filter { !$0.isEmpty }
+        guard !needles.isEmpty else { return nil }
+        var parts: [String] = []
+        for needle in needles {
+            let value = mdEscape(needle)
+            parts.append("(kMDItemTextContent == \"\(value)*\"cdw || kMDItemDisplayName == \"*\(value)*\"cd)")
+        }
+        if !input.extensions.isEmpty {
+            parts.append("(" + input.extensions.map { "kMDItemFSName == \"*.\(mdEscape($0))\"c" }.joined(separator: " || ") + ")")
+        }
+        if let kind = input.kind {
+            parts.append(kindQuery(kind))
+        }
+        if let days = input.modifiedWithinDays {
+            parts.append("kMDItemFSContentChangeDate >= $time.today(-\(days))")
+        }
+        return NSPredicate(fromMetadataQueryString: parts.joined(separator: " && "))
+    }
+
+    private static func kindQuery(_ kind: SearchQuery.Kind) -> String {
+        switch kind {
+        case .application: return "kMDItemContentType == \"com.apple.application-bundle\""
+        case .folder: return "kMDItemContentType == \"public.folder\""
+        case .pdf: return "kMDItemContentType == \"com.adobe.pdf\""
+        case .image: return "kMDItemContentTypeTree == \"public.image\""
+        case .video: return "kMDItemContentTypeTree == \"public.movie\""
+        case .audio: return "kMDItemContentTypeTree == \"public.audio\""
+        case .archive: return "kMDItemContentTypeTree == \"public.archive\""
+        case .document:
+            return "(kMDItemContentTypeTree == \"public.composite-content\" || kMDItemContentTypeTree == \"public.text\" || " +
+                "kMDItemContentTypeTree == \"public.presentation\" || kMDItemContentTypeTree == \"public.spreadsheet\")"
+        }
+    }
+
+    /// Escapes a value for a Spotlight query string literal.
+    static func mdEscape(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "*", with: "\\*")
     }
 
     private static func kindPredicate(_ kind: SearchQuery.Kind) -> NSPredicate {
@@ -233,29 +279,32 @@ final class FileSearchCoordinator {
     let applications = ApplicationIndex()
     let recents: RecentItems
     let preferences: Preferences
+    let pinyinIndex: NameIndex?
     private var generation = 0
 
-    init(recents: RecentItems, preferences: Preferences) {
+    init(recents: RecentItems, preferences: Preferences, pinyinIndex: NameIndex? = nil) {
         self.recents = recents
         self.preferences = preferences
+        self.pinyinIndex = pinyinIndex
         applications.refresh()
     }
 
     /// `update` is called on the main thread with the ranked list, possibly several times.
-    func search(_ text: String, update: @escaping ([SearchResult], _ finished: Bool) -> Void) {
+    /// `content` searches inside files (and their names) instead of names only.
+    func search(_ text: String, content: Bool = false, update: @escaping ([SearchResult], _ finished: Bool) -> Void) {
         generation += 1
         let current = generation
         let query = SearchQuery.parse(text)
-        guard !query.isEmpty else {
+        guard !query.isEmpty, !content || !query.nameNeedles.isEmpty else {
             spotlight.stop()
             update([], true)
             return
         }
-        let instant = localCandidates(for: query)
-        update(rank(instant, spotlight: [], query: query), false)
-        spotlight.search(query) { [weak self] hits, finished in
+        let instant = content ? [] : localCandidates(for: query)
+        update(rank(instant, spotlight: [], query: query, content: content), false)
+        spotlight.search(query, content: content) { [weak self] hits, finished in
             guard let self, current == self.generation else { return }
-            update(self.rank(instant, spotlight: hits, query: query), finished)
+            update(self.rank(instant, spotlight: hits, query: query, content: content), finished)
         }
     }
 
@@ -279,23 +328,35 @@ final class FileSearchCoordinator {
             results.append(SearchResult(url: app.url, displayName: app.displayName, fileName: app.fileName,
                                         contentType: "com.apple.application-bundle", modified: nil, size: nil, score: score + 150))
         }
-        // Recently opened files also match by pinyin, which Spotlight cannot do.
+        // Pinyin: Spotlight cannot do it, so use KongFetch's own name index plus recently opened files.
         if let word = query.pinyinCandidate {
-            for entry in recents.entries.prefix(200) {
+            var seen = Set<String>()
+            let wantsFolders = query.kind == .folder
+            let fileKinds: Set<SearchQuery.Kind?> = [nil, .folder, .application]
+            if fileKinds.contains(query.kind), let index = pinyinIndex {
+                let matches = index.matches(pinyin: word, limit: 200) { entry in
+                    (!wantsFolders || entry.isDirectory) && query.passesExclusionsAndExtensions(entry.name)
+                }
+                for (entry, score) in matches where FileManager.default.fileExists(atPath: entry.path) {
+                    if let result = makeResult(path: entry.path, score: score) {
+                        results.append(result)
+                        seen.insert(entry.path)
+                    }
+                }
+            }
+            for entry in recents.entries.prefix(200) where !seen.contains(entry.path) {
                 let name = (entry.path as NSString).lastPathComponent
-                guard let forms = Pinyin.forms(for: Ranker.displayStem(name)),
+                guard query.passesExclusionsAndExtensions(name),
+                      let forms = Pinyin.forms(for: Ranker.displayStem(name)),
                       let score = Ranker.pinyinScore(forms: forms, query: word),
                       FileManager.default.fileExists(atPath: entry.path) else { continue }
-                if var result = makeResult(path: entry.path, score: score) {
-                    result.score = score
-                    results.append(result)
-                }
+                if let result = makeResult(path: entry.path, score: score) { results.append(result) }
             }
         }
         return results
     }
 
-    private func rank(_ local: [SearchResult], spotlight hits: [SpotlightSearch.Hit], query: SearchQuery) -> [SearchResult] {
+    private func rank(_ local: [SearchResult], spotlight hits: [SpotlightSearch.Hit], query: SearchQuery, content: Bool) -> [SearchResult] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let excludedPrefixes = preferences.excludedPathPrefixes.map { ($0 as NSString).expandingTildeInPath }.filter { !$0.isEmpty }
         let hideLibrary = !preferences.includeLibraryFolders
@@ -308,10 +369,21 @@ final class FileSearchCoordinator {
 
         for hit in hits where allowed(hit.path) {
             guard query.passesExclusionsAndExtensions(hit.fileName, alternateName: hit.displayName) else { continue }
-            let nameScore = [Ranker.nameScore(name: hit.displayName, needles: query.nameNeedles),
-                             Ranker.nameScore(name: hit.fileName, needles: query.nameNeedles)].compactMap { $0 }.max() ?? 0
-            var score = nameScore - Ranker.locationPenalty(path: hit.path, home: home) + recents.boost(for: hit.path)
-            if hit.contentType == "com.apple.application-bundle" && query.kind == nil {
+            let nameMatch = [Ranker.nameScore(name: hit.displayName, needles: query.nameNeedles),
+                             Ranker.nameScore(name: hit.fileName, needles: query.nameNeedles)].compactMap { $0 }.max()
+            var score: Int
+            if content {
+                // Content matches: Spotlight's relevance, a bonus when the name matches too, and recent edits first.
+                score = Int((hit.relevance ?? 0.5) * 600) + (nameMatch.map { $0 / 3 } ?? 0)
+                if let modified = hit.modified {
+                    let age = Date().timeIntervalSince(modified)
+                    score += age < 30 * 86_400 ? 60 : (age < 365 * 86_400 ? 20 : 0)
+                }
+            } else {
+                score = nameMatch ?? 0
+            }
+            score += recents.boost(for: hit.path) - Ranker.locationPenalty(path: hit.path, home: home)
+            if !content && hit.contentType == "com.apple.application-bundle" && query.kind == nil {
                 // Installed apps first; copies inside build folders and disk images barely count.
                 let installed = ["/Applications/", "/System/Applications/", home + "/Applications/"].contains { hit.path.hasPrefix($0) }
                 score += installed ? 200 : 20
