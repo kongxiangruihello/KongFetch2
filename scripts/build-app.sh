@@ -52,6 +52,8 @@ build_number="$(git -C "$root" rev-list --count HEAD 2>/dev/null || echo 1)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app/Contents/Info.plist"
 # Lets the app find its source folder for in-app updates.
 /usr/libexec/PlistBuddy -c "Add :KFSourceRoot string $root" "$app/Contents/Info.plist"
+commit="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
+[[ -n "$commit" ]] && /usr/libexec/PlistBuddy -c "Add :KFSourceCommit string $commit" "$app/Contents/Info.plist"
 
 xattr -cr "$app"
 

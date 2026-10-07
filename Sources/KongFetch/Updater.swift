@@ -85,10 +85,18 @@ final class Updater {
                 self.log("检查失败：\(fetch.output)")
                 return
             }
-            let log = self.git(["log", "--format=%s", "HEAD..origin/main"], root)
+            // Compare with the commit this running copy was built from (after a rollback that is older than
+            // the source folder), falling back to the source folder's HEAD.
+            let base = Self.installedCommit.flatMap { self.git(["cat-file", "-e", $0], root).status == 0 ? $0 : nil } ?? "HEAD"
+            let log = self.git(["log", "--format=%s", "\(base)..origin/main"], root)
             let subjects = log.output.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
             self.set { $0.phase = .idle; $0.pending = subjects; $0.lastCheck = Date() }
         }
+    }
+
+    /// Recorded by the build script; nil for builds made before 4.3.2.
+    static var installedCommit: String? {
+        Bundle.main.object(forInfoDictionaryKey: "KFSourceCommit") as? String
     }
 
     // MARK: Updating
