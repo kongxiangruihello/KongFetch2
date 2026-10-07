@@ -87,6 +87,8 @@ struct SettingsView: View {
                 .tabItem { Label("搜索", systemImage: "magnifyingglass") }
             ClipboardSettings(preferences: preferences, status: status, actions: actions)
                 .tabItem { Label("剪贴板", systemImage: "doc.on.clipboard") }
+            WebSearchSettings(preferences: preferences)
+                .tabItem { Label("网页搜索", systemImage: "globe") }
             UpdateSettings(preferences: preferences, status: status, actions: actions)
                 .tabItem { Label("更新", systemImage: "arrow.triangle.2.circlepath") }
             DiagnosticsView(preferences: preferences, status: status, actions: actions)
@@ -358,6 +360,13 @@ private struct ClipboardSettings: View {
                     }
                 }
             }
+            Section("整理后粘贴（剪贴板窗口中按 ⌘J）") {
+                ForEach(TextCleanup.Operation.allCases) { operation in
+                    Toggle(operation.title, isOn: cleanupBinding(operation))
+                }
+                Text("适合从 PDF、网页复制的文字：去掉排版造成的换行和断词，中文旁的 , . ; : ? ! ( ) \" 改为全角，去掉汉字之间的空格。⌘E 可先预览效果，⌘K 可单独使用某一项。繁简转换按字对应（如“发”可能是“發”或“髮”），转换后请校对。")
+                    .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             Section("保留") {
                 Picker("未固定的记录保留", selection: $preferences.clipboardRetentionDays) {
                     Text("7 天").tag(7)
@@ -414,6 +423,21 @@ private struct ClipboardSettings: View {
         }
     }
 
+    private func cleanupBinding(_ operation: TextCleanup.Operation) -> Binding<Bool> {
+        Binding(
+            get: { preferences.cleanupOperations.contains(operation) },
+            set: { on in
+                var list = preferences.cleanupOperations.filter { $0 != operation }
+                if on {
+                    list.append(operation)
+                    if operation == .toSimplified { list.removeAll { $0 == .toTraditional } }
+                    if operation == .toTraditional { list.removeAll { $0 == .toSimplified } }
+                }
+                preferences.cleanupOperations = list
+            }
+        )
+    }
+
     private func addApps() {
         let panel = NSOpenPanel()
         panel.title = "选择不记录的应用"
@@ -433,6 +457,65 @@ private struct ClipboardSettings: View {
             return (FileManager.default.displayName(atPath: url.path) as NSString).deletingPathExtension
         }
         return "（未安装）"
+    }
+}
+
+private struct WebSearchSettings: View {
+    @ObservedObject var preferences: Preferences
+
+    var body: some View {
+        Form {
+            Section {
+                Text("在搜索窗口输入“关键词 + 空格 + 要搜的内容”，例如 hd 仁、ct 学而，回车即在浏览器中搜索。网址中用 {query} 表示要搜的内容。勾选“兜底”的网站会在找不到文件时列出。")
+                    .font(.callout).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
+                    GridRow {
+                        Text("关键词").frame(width: 56, alignment: .leading)
+                        Text("名称").frame(width: 120, alignment: .leading)
+                        Text("网址")
+                        Text("兜底")
+                        Text("")
+                    }
+                    .font(.caption).foregroundColor(.secondary)
+                    ForEach($preferences.quickLinks) { $link in
+                        GridRow {
+                            TextField("", text: $link.keyword).frame(width: 56)
+                            TextField("", text: $link.name).frame(width: 120)
+                            TextField("https://…{query}", text: $link.template)
+                                .foregroundColor(link.url(for: "论语") == nil ? .orange : .primary)
+                            Toggle("", isOn: $link.fallback).labelsHidden()
+                            HStack(spacing: 2) {
+                                Button {
+                                    if let url = link.url(for: "论语") { NSWorkspace.shared.open(url) }
+                                } label: { Image(systemName: "arrow.up.right.square") }
+                                .buttonStyle(.borderless).help("用“论语”试一下")
+                                Button {
+                                    preferences.quickLinks.removeAll { $0.id == link.id }
+                                } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless).help("删除")
+                            }
+                        }
+                    }
+                }
+                if !duplicates.isEmpty {
+                    Text("关键词重复：\(duplicates.joined(separator: "、"))，只有排在前面的生效。")
+                        .font(.caption).foregroundColor(.orange)
+                }
+                HStack {
+                    Button("添加") {
+                        preferences.quickLinks.append(QuickLink(keyword: "", name: "新网站", template: "https://"))
+                    }
+                    Spacer()
+                    Button("恢复默认") { preferences.quickLinks = QuickLinks.defaults }
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var duplicates: [String] {
+        let keywords = preferences.quickLinks.map { $0.keyword.lowercased() }.filter { !$0.isEmpty }
+        return Array(Set(keywords.filter { k in keywords.filter { $0 == k }.count > 1 })).sorted()
     }
 }
 

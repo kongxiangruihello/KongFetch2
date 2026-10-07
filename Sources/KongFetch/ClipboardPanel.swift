@@ -24,6 +24,10 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
 
     private var rows: [ClipItem] = []
     private var thumbnailCache = NSCache<NSString, NSImage>()
+    /// Show the selected text as "整理后粘贴" would paste it (⌘E).
+    private var previewCleaned = false
+    /// True while the ⌘K menu is open, so losing focus to it does not close the window.
+    private var menuOpen = false
 
     var openSettings: (() -> Void)?
 
@@ -43,7 +47,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         panel.keyHandler = { [weak self] event in self?.handleKey(event) ?? false }
         panel.onResignKey = { [weak self] in
             DispatchQueue.main.async {
-                guard let self, self.panel.isVisible, !self.panel.isKeyWindow, self.panel.attachedSheet == nil else { return }
+                guard let self, self.panel.isVisible, !self.panel.isKeyWindow, !self.menuOpen, self.panel.attachedSheet == nil else { return }
                 self.hide()
             }
         }
@@ -56,6 +60,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
 
     func show() {
         field.stringValue = ""
+        previewCleaned = false
         reload()
         panel.present()
         panel.makeFirstResponder(field)
@@ -107,7 +112,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         detailLabel.alignment = .center
 
         hintLabel.alignment = .right
-        hintLabel.stringValue = "↩ 粘贴   ⇧↩ 纯文本／图中文字   ⌘↩ 仅拷贝   ⌘P 固定   ⌘⌫ 删除"
+        hintLabel.stringValue = "↩ 粘贴   ⇧↩ 纯文本   ⌘J 整理后粘贴   ⌘E 预览整理   ⌘K 更多操作"
 
         buildOnboarding()
 
@@ -252,9 +257,11 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         case .text:
             textScroll.isHidden = false
             imagePreview.isHidden = true
-            textPreview.string = item.text ?? ""
-            details.append("\(item.text?.count ?? 0) 字")
+            let text = item.text ?? ""
+            textPreview.string = previewCleaned ? TextCleanup.apply(preferences.cleanupOperations, to: text) : text
+            details.append("\(text.count) 字")
             if item.richTextFile != nil { details.append("含格式") }
+            if previewCleaned { details.append("整理预览（⌘E 关闭）") }
         case .files:
             textScroll.isHidden = false
             imagePreview.isHidden = true
@@ -268,7 +275,8 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
                 // Picture on top, the recognized text below it, in one scrollable view.
                 textScroll.isHidden = false
                 imagePreview.isHidden = true
-                textPreview.textStorage?.setAttributedString(Self.imageWithText(image, recognized, width: textScroll.contentSize.width - 30))
+                let shown = previewCleaned ? TextCleanup.apply(preferences.cleanupOperations, to: recognized) : recognized
+                textPreview.textStorage?.setAttributedString(Self.imageWithText(image, shown, width: textScroll.contentSize.width - 30))
                 details.append("⌘T 拷贝图中文字")
             } else {
                 textScroll.isHidden = true
@@ -338,6 +346,9 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         switch key {
         case "p": togglePin(); return true
         case "t": copyRecognizedText(); return true
+        case "j": pasteCleaned(preferences.cleanupOperations); return true
+        case "e": togglePreviewCleaned(); return true
+        case "k": showActionMenu(); return true
         case ",": hide(); openSettings?(); return true
         case "w": hide(); return true
         default:
@@ -370,12 +381,122 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
             return
         }
         history.touch(item.id)
+        finishPaste()
+    }
+
+    /// Hides the window and, if allowed, pastes into the app that was in front.
+    private func finishPaste() {
         hide()
         guard preferences.autoPaste else { return }
         if Paster.isTrusted {
             // Wait for the previous app's window to take keyboard focus back.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { Paster.pasteIntoFrontmostApp() }
         }
+    }
+
+    /// Tidies the selected text (or the text recognized in a picture) and pastes it as plain text.
+    private func pasteCleaned(_ operations: [TextCleanup.Operation]) {
+        guard let item = selectedItem else { return }
+        guard let text = monitor.plainText(of: item), !text.isEmpty else {
+            statusLabel.stringValue = item.kind == .image && item.recognizedText == nil ? "仍在识别图中文字，请稍候" : "这条记录没有可整理的文字"
+            return
+        }
+        guard !operations.isEmpty else {
+            statusLabel.stringValue = "还没有选择整理方式（⌘K › 整理方式…）"
+            return
+        }
+        guard monitor.restoreText(TextCleanup.apply(operations, to: text)) else { return }
+        history.touch(item.id)
+        finishPaste()
+    }
+
+    private func togglePreviewCleaned() {
+        previewCleaned.toggle()
+        updatePreview()
+    }
+
+    // MARK: Action menu (⌘K)
+
+    private func showActionMenu() {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let item = selectedItem
+        let hasText = item.flatMap { monitor.plainText(of: $0) }?.isEmpty == false
+
+        let summary = preferences.cleanupOperations.map(\.shortTitle).joined(separator: "、")
+        add(menu, "整理后粘贴" + (summary.isEmpty ? "" : "（\(summary)）"), "j", #selector(menuPasteCleaned), enabled: hasText)
+        let single = NSMenuItem(title: "单项整理后粘贴", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.autoenablesItems = false
+        for operation in TextCleanup.Operation.allCases {
+            let entry = add(submenu, operation.title, "", #selector(menuPasteOneOperation(_:)), enabled: hasText)
+            entry.representedObject = operation.rawValue
+        }
+        single.submenu = submenu
+        single.isEnabled = hasText
+        menu.addItem(single)
+        add(menu, previewCleaned ? "关闭整理预览" : "预览整理效果", "e", #selector(menuTogglePreview), enabled: hasText)
+        menu.addItem(.separator())
+        add(menu, "粘贴为纯文本", "\r", #selector(menuPastePlain), enabled: item != nil, modifiers: [.shift])
+        add(menu, "仅拷贝，不粘贴", "\r", #selector(menuCopyOnly), enabled: item != nil)
+        if item?.kind == .image { add(menu, "拷贝图中文字", "t", #selector(menuCopyRecognized), enabled: true) }
+        add(menu, item?.pinned == true ? "取消固定" : "固定", "p", #selector(menuTogglePin), enabled: item != nil)
+        add(menu, "删除", "\u{8}", #selector(menuDelete), enabled: item != nil)
+        menu.addItem(.separator())
+        let ways = NSMenuItem(title: "整理方式（⌘J）", action: nil, keyEquivalent: "")
+        let waysMenu = NSMenu()
+        waysMenu.autoenablesItems = false
+        for operation in TextCleanup.Operation.allCases {
+            let entry = add(waysMenu, operation.title, "", #selector(menuToggleOperation(_:)), enabled: true)
+            entry.representedObject = operation.rawValue
+            entry.state = preferences.cleanupOperations.contains(operation) ? .on : .off
+        }
+        ways.submenu = waysMenu
+        menu.addItem(ways)
+
+        let row = max(0, table.selectedRow)
+        let rect = table.numberOfRows > 0 ? table.rect(ofRow: row) : table.bounds
+        menuOpen = true
+        _ = menu.popUp(positioning: nil, at: NSPoint(x: rect.midX, y: rect.maxY), in: table)
+        menuOpen = false
+        if panel.isVisible { panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(field) }
+    }
+
+    @discardableResult
+    private func add(_ menu: NSMenu, _ title: String, _ key: String, _ action: Selector, enabled: Bool,
+                     modifiers: NSEvent.ModifierFlags = [.command]) -> NSMenuItem {
+        let entry = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        entry.keyEquivalentModifierMask = key.isEmpty ? [] : modifiers
+        entry.target = self
+        entry.isEnabled = enabled
+        menu.addItem(entry)
+        return entry
+    }
+
+    @objc private func menuPasteCleaned() { pasteCleaned(preferences.cleanupOperations) }
+    @objc private func menuPasteOneOperation(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let operation = TextCleanup.Operation(rawValue: raw) else { return }
+        pasteCleaned([operation])
+    }
+    @objc private func menuTogglePreview() { togglePreviewCleaned() }
+    @objc private func menuPastePlain() { paste(plainText: true) }
+    @objc private func menuCopyOnly() { copyOnly() }
+    @objc private func menuCopyRecognized() { copyRecognizedText() }
+    @objc private func menuTogglePin() { togglePin() }
+    @objc private func menuDelete() { deleteSelected() }
+    @objc private func menuToggleOperation(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let operation = TextCleanup.Operation(rawValue: raw) else { return }
+        var list = preferences.cleanupOperations
+        if let index = list.firstIndex(of: operation) {
+            list.remove(at: index)
+        } else {
+            list.append(operation)
+            // Simplified and traditional exclude each other.
+            if operation == .toSimplified { list.removeAll { $0 == .toTraditional } }
+            if operation == .toTraditional { list.removeAll { $0 == .toSimplified } }
+        }
+        preferences.cleanupOperations = list
+        updatePreview()
     }
 
     private func copyOnly() {

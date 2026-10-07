@@ -141,18 +141,33 @@ final class ClipboardMonitor {
         }
     }
 
+    /// The plain text of an entry: its text, or the text recognized in a picture.
+    func plainText(of item: ClipItem) -> String? {
+        switch item.kind {
+        case .text: return item.text
+        case .image: return item.recognizedText?.isEmpty == false ? item.recognizedText : nil
+        case .files: return nil
+        }
+    }
+
+    /// Puts plain text on the pasteboard without recording it as a new entry.
+    @discardableResult
+    func restoreText(_ text: String) -> Bool {
+        let entry = NSPasteboardItem()
+        entry.setString(text, forType: .string)
+        entry.setString("1", forType: Self.restoredMarker)
+        pasteboard.clearContents()
+        let ok = pasteboard.writeObjects([entry])
+        lastChangeCount = pasteboard.changeCount
+        return ok
+    }
+
     /// Puts an entry back on the pasteboard. Returns false if its data is gone.
     @discardableResult
     func restore(_ item: ClipItem, plainTextOnly: Bool = false) -> Bool {
         // "Paste as plain text" on a picture pastes the text recognized in it.
         if plainTextOnly, item.kind == .image, let text = item.recognizedText, !text.isEmpty {
-            let entry = NSPasteboardItem()
-            entry.setString(text, forType: .string)
-            entry.setString("1", forType: Self.restoredMarker)
-            pasteboard.clearContents()
-            let ok = pasteboard.writeObjects([entry])
-            lastChangeCount = pasteboard.changeCount
-            return ok
+            return restoreText(text)
         }
         let entry = NSPasteboardItem()
         switch item.kind {

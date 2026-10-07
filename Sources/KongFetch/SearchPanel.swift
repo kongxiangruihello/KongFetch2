@@ -19,7 +19,21 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     /// Search inside files instead of names only. Toggled with Tab.
     private var contentMode = false
 
-    private var results: [SearchResult] = []
+    /// One line in the results list: a file, or a web search to open in the browser.
+    private enum Row {
+        case file(SearchResult)
+        case web(QuickLink, String)
+
+        var file: SearchResult? {
+            if case .file(let result) = self { return result }
+            return nil
+        }
+    }
+
+    private var rows: [Row] = []
+    private var results: [SearchResult] { rows.compactMap(\.file) }
+    /// Web searches shown above the files (a keyword match) or below them (when nothing was found).
+    private var webRows: [Row] = []
     private var showingRecents = false
     /// True once the user picks a row with the arrows or the mouse; until then the top result stays selected
     /// while Spotlight streams in more results.
@@ -31,6 +45,8 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     var openSettings: (() -> Void)?
     /// Explains missing folder permissions when a search finds nothing.
     var accessHint: (() -> String?)?
+    /// The user's web searches (Settings › 网页搜索).
+    var quickLinks: () -> [QuickLink] = { QuickLinks.defaults }
 
     init(coordinator: FileSearchCoordinator) {
         self.coordinator = coordinator
@@ -115,7 +131,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         divider.translatesAutoresizingMaskIntoConstraints = false
         preview.translatesAutoresizingMaskIntoConstraints = false
         hintLabel.alignment = .right
-        hintLabel.stringValue = "⇥ 名称/全文   ↩ 打开   ⌘↩ 在访达中显示   ⌘Y 快速查看   ⌘C 拷贝   ⌥⌘C 拷贝路径"
+        hintLabel.stringValue = "⇥ 名称/全文   ↩ 打开   ⌘↩ 在访达中显示   ⌘Y 快速查看   ⌘C 拷贝   ⌥⌘C 拷贝路径   关键词+空格 网页搜索"
 
         modeButton.bezelStyle = .inline
         modeButton.controlSize = .small
@@ -190,46 +206,60 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
             return
         }
         showingRecents = false
+        // "hd 仁": the web search goes first, files matching the whole text still follow.
+        let keywordMatch = QuickLinks.match(text, in: quickLinks())
+        webRows = keywordMatch.map { [Row.web($0.link, $0.query)] } ?? []
         spinner.startAnimation(nil)
         coordinator.search(text, content: contentMode) { [weak self] results, finished in
             guard let self else { return }
-            self.setResults(results)
-            if finished {
+            if finished, results.isEmpty, keywordMatch == nil {
+                let query = text.trimmingCharacters(in: .whitespaces)
+                self.webRows = self.quickLinks().filter(\.fallback).map { Row.web($0, query) }
+            }
+            let files = results.map(Row.file)
+            self.setRows(keywordMatch != nil ? self.webRows + files : files + self.webRows)
+            if let match = keywordMatch {
+                self.statusLabel.stringValue = "↩ 在\(match.link.name)中搜索「\(match.query)」" + (results.isEmpty ? "" : " · ↓ 另有 \(results.count) 个文件")
+            } else if finished {
                 self.spinner.stopAnimation(nil)
                 if results.isEmpty {
-                    self.statusLabel.stringValue = self.accessHint?() ?? "没有找到。可试试拼音首字母、减少关键词，或在设置中检查排除的文件夹"
+                    self.statusLabel.stringValue = self.accessHint?() ?? "没有找到文件。可试试拼音首字母、减少关键词，或在网上搜索"
                 } else {
                     self.statusLabel.stringValue = "\(results.count) 个结果"
                 }
             } else {
                 self.statusLabel.stringValue = "正在搜索… \(results.count)"
             }
+            if finished { self.spinner.stopAnimation(nil) }
         }
     }
 
     private func showRecents() {
         showingRecents = true
-        setResults(coordinator.recentResults())
+        webRows = []
+        setRows(coordinator.recentResults().map(Row.file))
         statusLabel.stringValue = results.isEmpty
             ? "输入名称开始搜索 · 语法：ext:pdf  kind:folder  \"短语\"  -排除  days:7"
             : "最近打开 · 输入名称开始搜索"
     }
 
-    private func setResults(_ newResults: [SearchResult]) {
+    private func setRows(_ newRows: [Row]) {
         let previous = userChoseRow ? selectedResult?.path : nil
-        results = newResults
+        rows = newRows
         table.reloadData()
-        let index = previous.flatMap { path in results.firstIndex { $0.path == path } } ?? 0
-        if results.indices.contains(index) {
+        let index = previous.flatMap { path in rows.firstIndex { $0.file?.path == path } } ?? 0
+        if rows.indices.contains(index) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             table.scrollRowToVisible(index)
         }
         updatePreview()
     }
 
-    private var selectedResult: SearchResult? {
-        results.indices.contains(table.selectedRow) ? results[table.selectedRow] : nil
+    private var selectedRow: Row? {
+        rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil
     }
+
+    private var selectedResult: SearchResult? { selectedRow?.file }
 
     // MARK: Keyboard
 
@@ -266,8 +296,8 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
                 if let editor = panel.firstResponder as? NSTextView, editor.selectedRange().length > 0 { return false }
                 copySelectedFile(); return true
             default:
-                if let digit = Int(key), (1...9).contains(digit), results.indices.contains(digit - 1) {
-                    open(results[digit - 1]); return true
+                if let digit = Int(key), (1...9).contains(digit), rows.indices.contains(digit - 1) {
+                    activate(rows[digit - 1]); return true
                 }
             }
         }
@@ -277,9 +307,9 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func moveSelection(by delta: Int) {
-        guard !results.isEmpty else { return }
-        let current = table.selectedRow < 0 ? (delta > 0 ? -1 : results.count) : table.selectedRow
-        let next = max(0, min(results.count - 1, current + delta))
+        guard !rows.isEmpty else { return }
+        let current = table.selectedRow < 0 ? (delta > 0 ? -1 : rows.count) : table.selectedRow
+        let next = max(0, min(rows.count - 1, current + delta))
         userChoseRow = true
         table.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         table.scrollRowToVisible(next)
@@ -289,8 +319,22 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
 
     @objc func openSelected() {
         let row = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
-        guard results.indices.contains(row) else { return }
-        open(results[row])
+        guard rows.indices.contains(row) else { return }
+        activate(rows[row])
+    }
+
+    private func activate(_ row: Row) {
+        switch row {
+        case .file(let result):
+            open(result)
+        case .web(let link, let query):
+            guard let url = link.url(for: query) else {
+                statusLabel.stringValue = "“\(link.name)”的网址无效，请在设置 › 网页搜索中检查"
+                return
+            }
+            hide()
+            NSWorkspace.shared.open(url)
+        }
     }
 
     private func open(_ result: SearchResult) {
@@ -374,7 +418,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
 
     // MARK: Table
 
-    func numberOfRows(in tableView: NSTableView) -> Int { results.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { SoftSelectionRowView() }
 
@@ -385,12 +429,18 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
             view.identifier = id
             return view
         }()
-        let result = results[row]
-        cell.icon.image = NSWorkspace.shared.icon(forFile: result.path)
-        cell.title.stringValue = result.displayName
-        let parent = (result.path as NSString).deletingLastPathComponent
-        cell.subtitle.stringValue = PathDisplay.pretty(parent, home: NSHomeDirectory())
         cell.badge.stringValue = row < 9 ? "⌘\(row + 1)" : ""
+        switch rows[row] {
+        case .file(let result):
+            cell.icon.image = NSWorkspace.shared.icon(forFile: result.path)
+            cell.title.stringValue = result.displayName
+            let parent = (result.path as NSString).deletingLastPathComponent
+            cell.subtitle.stringValue = PathDisplay.pretty(parent, home: NSHomeDirectory())
+        case .web(let link, let query):
+            cell.icon.image = NSImage(systemSymbolName: "globe", accessibilityDescription: "网页搜索")
+            cell.title.stringValue = "在\(link.name)中搜索「\(query)」"
+            cell.subtitle.stringValue = "网页搜索 · 关键词 \(link.keyword) · " + (link.url(for: query)?.host ?? "网址无效")
+        }
         return cell
     }
 
@@ -401,7 +451,8 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        results.indices.contains(row) ? results[row].url as NSURL : nil
+        guard rows.indices.contains(row), let file = rows[row].file else { return nil }
+        return file.url as NSURL
     }
 
     @objc private func toggleMode() {

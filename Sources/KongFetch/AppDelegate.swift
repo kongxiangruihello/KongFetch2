@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                                                pinyinIndex: pinyinIndex.index, ocrStore: ocr.store))
         clipboardPanel = ClipboardPanelController(monitor: clipboardMonitor, preferences: preferences)
         searchPanel.openSettings = { [weak self] in self?.openSettings() }
+        searchPanel.quickLinks = { [preferences] in preferences.quickLinks }
         clipboardPanel.openSettings = { [weak self] in self?.openSettings() }
 
         buildStatusItem()

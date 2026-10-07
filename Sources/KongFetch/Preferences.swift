@@ -34,6 +34,14 @@ final class Preferences: ObservableObject {
     @Published var ocrOnlyOnPower: Bool { didSet { defaults.set(ocrOnlyOnPower, forKey: key("ocrOnlyOnPower")) } }
     @Published var ocrDownloadFromICloud: Bool { didSet { defaults.set(ocrDownloadFromICloud, forKey: key("ocrDownloadFromICloud")) } }
     @Published var clipboardExcludedApps: [String] { didSet { defaults.set(clipboardExcludedApps, forKey: key("clipboardExcludedApps")) } }
+    /// What "整理后粘贴" (⌘J in the clipboard window) does.
+    @Published var cleanupOperations: [TextCleanup.Operation] {
+        didSet { defaults.set(cleanupOperations.map(\.rawValue), forKey: key("cleanupOperations")) }
+    }
+    /// Web searches reached by a keyword in the search window.
+    @Published var quickLinks: [QuickLink] {
+        didSet { if let data = try? JSONEncoder().encode(quickLinks) { defaults.set(data, forKey: key("quickLinks")) } }
+    }
 
     @Published var autoCheckUpdates: Bool { didSet { defaults.set(autoCheckUpdates, forKey: key("autoCheckUpdates")) } }
     @Published var hasCompletedFirstLaunch: Bool { didSet { defaults.set(hasCompletedFirstLaunch, forKey: key("hasCompletedFirstLaunch")) } }
@@ -68,6 +76,10 @@ final class Preferences: ObservableObject {
         ocrPageLimit = value("ocrPageLimit", 200)
         ocrOnlyOnPower = value("ocrOnlyOnPower", true)
         ocrDownloadFromICloud = value("ocrDownloadFromICloud", false)
+        cleanupOperations = (defaults.array(forKey: "kf4.cleanupOperations") as? [String])?
+            .compactMap(TextCleanup.Operation.init(rawValue:)) ?? TextCleanup.defaultOperations
+        quickLinks = defaults.data(forKey: "kf4.quickLinks").flatMap { try? JSONDecoder().decode([QuickLink].self, from: $0) }
+            ?? QuickLinks.defaults
         hasCompletedFirstLaunch = value("hasCompletedFirstLaunch", false)
         autoCheckUpdates = value("autoCheckUpdates", true)
         folderAccessRequested = value("folderAccessRequested", false)
