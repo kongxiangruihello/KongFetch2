@@ -128,8 +128,6 @@ final class ClipboardMonitor {
 
     // MARK: Restoring
 
-    /// Puts an entry back on the pasteboard. Returns false if its data is gone.
-    @discardableResult
     /// Recognizes text in an image entry in the background (once per entry per run).
     func recognizeText(in item: ClipItem) {
         guard preferences.clipboardOCR, item.kind == .image, item.recognizedText == nil,
@@ -143,6 +141,8 @@ final class ClipboardMonitor {
         }
     }
 
+    /// Puts an entry back on the pasteboard. Returns false if its data is gone.
+    @discardableResult
     func restore(_ item: ClipItem, plainTextOnly: Bool = false) -> Bool {
         // "Paste as plain text" on a picture pastes the text recognized in it.
         if plainTextOnly, item.kind == .image, let text = item.recognizedText, !text.isEmpty {
