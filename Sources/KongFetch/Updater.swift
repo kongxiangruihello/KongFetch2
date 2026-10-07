@@ -81,7 +81,7 @@ final class Updater {
             guard let self else { return }
             let fetch = self.git(["fetch", "--quiet", "origin", "main"], root)
             guard fetch.status == 0 else {
-                self.set { $0.phase = .idle; $0.lastCheck = Date() }
+                self.set { $0.phase = .failed("连不上 GitHub，稍后再试（详情见日志）"); $0.lastCheck = Date() }
                 self.log("检查失败：\(fetch.output)")
                 return
             }
@@ -264,11 +264,14 @@ final class Updater {
     // MARK: Processes
 
     private func git(_ arguments: [String], _ root: String) -> (status: Int32, output: String) {
-        run("/usr/bin/git", ["-C", root] + arguments, root)
+        // Give up on a transfer slower than 1 KB/s for 20 seconds, and on any git command after 2 minutes.
+        run("/usr/bin/git", ["-C", root, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=20"] + arguments, root, timeout: 120)
     }
 
-    /// Runs a command to completion, appending its output to the update log.
-    private func run(_ executable: String, _ arguments: [String], _ directory: String) -> (status: Int32, output: String) {
+    /// Runs a command to completion, appending its output to the update log. A command that runs longer
+    /// than `timeout` seconds is stopped (a stalled network must not leave "正在检查" spinning forever).
+    private func run(_ executable: String, _ arguments: [String], _ directory: String,
+                     timeout: TimeInterval = 900) -> (status: Int32, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -286,11 +289,23 @@ final class Updater {
             log("$ \(executable) \(arguments.joined(separator: " "))\n无法运行：\(error.localizedDescription)")
             return (-1, error.localizedDescription)
         }
+        var timedOut = false
+        let watchdog = DispatchWorkItem {
+            guard process.isRunning else { return }
+            timedOut = true
+            process.terminate()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        let output = String(decoding: data, as: UTF8.self)
+        watchdog.cancel()
+        var output = String(decoding: data, as: UTF8.self)
+        if timedOut { output += "\n超过 \(Int(timeout)) 秒未完成，已停止。" }
         log("$ \(executable) \(arguments.joined(separator: " "))\n\(output)(退出码 \(process.terminationStatus))")
-        return (process.terminationStatus, output)
+        return (timedOut ? -2 : process.terminationStatus, output)
     }
 
     private func log(_ text: String) {
