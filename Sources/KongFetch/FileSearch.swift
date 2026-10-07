@@ -280,12 +280,14 @@ final class FileSearchCoordinator {
     let recents: RecentItems
     let preferences: Preferences
     let pinyinIndex: NameIndex?
+    let ocrStore: OCRStore?
     private var generation = 0
 
-    init(recents: RecentItems, preferences: Preferences, pinyinIndex: NameIndex? = nil) {
+    init(recents: RecentItems, preferences: Preferences, pinyinIndex: NameIndex? = nil, ocrStore: OCRStore? = nil) {
         self.recents = recents
         self.preferences = preferences
         self.pinyinIndex = pinyinIndex
+        self.ocrStore = ocrStore
         applications.refresh()
     }
 
@@ -300,7 +302,7 @@ final class FileSearchCoordinator {
             update([], true)
             return
         }
-        let instant = content ? [] : localCandidates(for: query)
+        let instant = content ? ocrCandidates(for: query) : localCandidates(for: query)
         update(rank(instant, spotlight: [], query: query, content: content), false)
         spotlight.search(query, content: content) { [weak self] hits, finished in
             guard let self, current == self.generation else { return }
@@ -354,6 +356,28 @@ final class FileSearchCoordinator {
             }
         }
         return results
+    }
+
+    /// Scanned documents and images whose recognized text matches (content mode).
+    private func ocrCandidates(for query: SearchQuery) -> [SearchResult] {
+        guard let store = ocrStore else { return [] }
+        let hits = store.search(query.nameNeedles, limit: 300) { path in
+            let name = (path as NSString).lastPathComponent
+            guard query.passesExclusionsAndExtensions(name) else { return false }
+            let ext = (path as NSString).pathExtension.lowercased()
+            switch query.kind {
+            case nil: return true
+            case .pdf?, .document?: return ext == "pdf"
+            case .image?: return OCRService.imageExtensions.contains(ext)
+            default: return false
+            }
+        }
+        return hits.compactMap { hit in
+            guard FileManager.default.fileExists(atPath: hit.path) else { return nil }
+            let name = (hit.path as NSString).lastPathComponent
+            let nameBonus = Ranker.nameScore(name: name, needles: query.nameNeedles).map { $0 / 3 } ?? 0
+            return makeResult(path: hit.path, score: 450 + nameBonus)
+        }
     }
 
     private func rank(_ local: [SearchResult], spotlight hits: [SpotlightSearch.Hit], query: SearchQuery, content: Bool) -> [SearchResult] {

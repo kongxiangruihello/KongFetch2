@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var subscriptions = Set<AnyCancellable>()
     private var folderAccessCache: (checked: Date, state: [String: Bool], fullDisk: Bool)?
     private var pinyinIndex: PinyinIndexService!
+    private var ocr: OCRService!
 
     static var supportDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -37,8 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clipboardMonitor = ClipboardMonitor(history: clipboardHistory, preferences: preferences)
         pinyinIndex = PinyinIndexService(cacheURL: support.appendingPathComponent("pinyin-index.txt"))
         pinyinIndex.onChange = { [weak self] in self?.status.refresh() }
+        ocr = OCRService(directory: support.appendingPathComponent("OCR", isDirectory: true))
+        ocr.onChange = { [weak self] in self?.status.refresh() }
         searchPanel = SearchPanelController(coordinator: FileSearchCoordinator(recents: recents, preferences: preferences,
-                                                                               pinyinIndex: pinyinIndex.index))
+                                                                               pinyinIndex: pinyinIndex.index, ocrStore: ocr.store))
         clipboardPanel = ClipboardPanelController(monitor: clipboardMonitor, preferences: preferences)
         searchPanel.openSettings = { [weak self] in self?.openSettings() }
         clipboardPanel.openSettings = { [weak self] in self?.openSettings() }
@@ -51,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clipboardMonitor.start()
         status.provider = { [weak self] in self?.makeSnapshot() ?? AppStatus.Snapshot() }
         observePreferences()
+        ocr.configure(ocrSettings)
         offerToQuitLegacyVersion()
 
         searchPanel.accessHint = { [weak self] in self?.folderAccessHint() }
@@ -133,6 +137,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         preferences.$pinyinIndexEnabled.combineLatest(preferences.$pinyinIndexExtraRoots).dropFirst()
             .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .sink { [weak self] _, _ in self?.restartPinyinIndex() }
+            .store(in: &subscriptions)
+        preferences.objectWillChange
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.ocr.configure(self.ocrSettings)
+            }
             .store(in: &subscriptions)
         preferences.$clipboardEnabled.dropFirst().sink { [weak self] enabled in
             if enabled { self?.clipboardMonitor.skipCurrentContents() }
@@ -230,7 +241,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 clearClipboard: { [weak self] includingPinned in self?.clipboardHistory.clear(includingPinned: includingPinned); self?.status.refresh() },
                 revealDataFolder: { NSWorkspace.shared.activateFileViewerSelecting([AppDelegate.supportDirectory.appendingPathComponent("Clipboard")]) },
                 requestFolderAccess: { [weak self] in self?.requestFolderAccess() },
-                rebuildPinyinIndex: { [weak self] in self?.pinyinIndex.rebuild(); self?.status.refresh() }
+                rebuildPinyinIndex: { [weak self] in self?.pinyinIndex.rebuild(); self?.status.refresh() },
+                ocrCheckNow: { [weak self] in self?.ocr.checkNow() },
+                ocrSetPaused: { [weak self] paused in self?.ocr.setPaused(paused); self?.status.refresh() },
+                ocrClear: { [weak self] in self?.ocr.clearResults() }
             )
             settingsWindow = SettingsWindowController(preferences: preferences, status: status, actions: actions)
         }
@@ -261,7 +275,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.pinyinIndexScanning = pinyinIndex.isScanning
         s.pinyinIndexUpdated = pinyinIndex.lastCompleted
         s.pinyinIndexRoots = pinyinRoots()
+        s.ocrRecognized = ocr.store.recognizedDocumentCount
+        s.ocrProgress = ocr.progress
+        s.ocrPaused = ocr.paused
         return s
+    }
+
+    private var ocrSettings: OCRService.Settings {
+        OCRService.Settings(enabled: preferences.ocrEnabled, folders: preferences.ocrFolders,
+                            pageLimit: preferences.ocrPageLimit, onlyOnPower: preferences.ocrOnlyOnPower)
     }
 
     // MARK: Pinyin index

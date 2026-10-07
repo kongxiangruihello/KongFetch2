@@ -25,6 +25,13 @@ final class Preferences: ObservableObject {
     @Published var clipboardRetentionDays: Int { didSet { defaults.set(clipboardRetentionDays, forKey: key("clipboardRetentionDays")) } }
     @Published var clipboardMaximumItems: Int { didSet { defaults.set(clipboardMaximumItems, forKey: key("clipboardMaximumItems")) } }
     @Published var autoPaste: Bool { didSet { defaults.set(autoPaste, forKey: key("autoPaste")) } }
+    /// Recognize text in copied pictures.
+    @Published var clipboardOCR: Bool { didSet { defaults.set(clipboardOCR, forKey: key("clipboardOCR")) } }
+    @Published var ocrEnabled: Bool { didSet { defaults.set(ocrEnabled, forKey: key("ocrEnabled")) } }
+    /// Folders whose scanned PDFs and images are recognized for full-text search.
+    @Published var ocrFolders: [String] { didSet { defaults.set(ocrFolders, forKey: key("ocrFolders")) } }
+    @Published var ocrPageLimit: Int { didSet { defaults.set(ocrPageLimit, forKey: key("ocrPageLimit")) } }
+    @Published var ocrOnlyOnPower: Bool { didSet { defaults.set(ocrOnlyOnPower, forKey: key("ocrOnlyOnPower")) } }
     @Published var clipboardExcludedApps: [String] { didSet { defaults.set(clipboardExcludedApps, forKey: key("clipboardExcludedApps")) } }
 
     @Published var hasCompletedFirstLaunch: Bool { didSet { defaults.set(hasCompletedFirstLaunch, forKey: key("hasCompletedFirstLaunch")) } }
@@ -53,6 +60,11 @@ final class Preferences: ObservableObject {
         clipboardMaximumItems = value("clipboardMaximumItems", 300)
         autoPaste = value("autoPaste", true)
         clipboardExcludedApps = value("clipboardExcludedApps", Self.defaultExcludedApps)
+        clipboardOCR = value("clipboardOCR", true)
+        ocrEnabled = value("ocrEnabled", true)
+        ocrFolders = value("ocrFolders", [String]())
+        ocrPageLimit = value("ocrPageLimit", 200)
+        ocrOnlyOnPower = value("ocrOnlyOnPower", true)
         hasCompletedFirstLaunch = value("hasCompletedFirstLaunch", false)
         folderAccessRequested = value("folderAccessRequested", false)
     }

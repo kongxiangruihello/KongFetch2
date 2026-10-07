@@ -76,7 +76,7 @@ public final class ClipboardHistory {
                             text: nil, filePaths: nil, imageFile: nil, imageWidth: nil, imageHeight: nil,
                             richTextFile: nil, sourceBundleID: candidate.sourceBundleID,
                             sourceName: candidate.sourceName.map { String($0.prefix(200)) },
-                            fingerprint: fingerprint, byteSize: 0)
+                            fingerprint: fingerprint, byteSize: 0, recognizedText: nil)
         do {
             switch candidate.payload {
             case .text(let text, let rtf):
@@ -124,6 +124,14 @@ public final class ClipboardHistory {
         var item = items.remove(at: index)
         item.lastUsed = now
         items.insert(item, at: 0)
+        persist()
+        onChange?()
+    }
+
+    /// Stores text recognized in an image entry; it becomes searchable and pasteable as text.
+    public func setRecognizedText(_ id: UUID, _ text: String) {
+        guard let index = items.firstIndex(where: { $0.id == id }), items[index].kind == .image else { return }
+        items[index].recognizedText = String(text.prefix(limits.maximumTextBytes))
         persist()
         onChange?()
     }

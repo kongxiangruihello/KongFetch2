@@ -107,7 +107,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         detailLabel.alignment = .center
 
         hintLabel.alignment = .right
-        hintLabel.stringValue = "↩ 粘贴   ⇧↩ 纯文本粘贴   ⌘↩ 仅拷贝   ⌘P 固定   ⌘⌫ 删除"
+        hintLabel.stringValue = "↩ 粘贴   ⇧↩ 纯文本／图中文字   ⌘↩ 仅拷贝   ⌘P 固定   ⌘⌫ 删除"
 
         buildOnboarding()
 
@@ -262,13 +262,43 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
             let missing = (item.filePaths ?? []).filter { !FileManager.default.fileExists(atPath: $0) }.count
             if missing > 0 { details.append("\(missing) 个文件已不存在") }
         case .image:
-            textScroll.isHidden = true
-            imagePreview.isHidden = false
-            imagePreview.image = item.imageFile.flatMap { history.store.readBlob($0) }.flatMap(NSImage.init(data:))
+            let image = item.imageFile.flatMap { history.store.readBlob($0) }.flatMap(NSImage.init(data:))
             details.append(ByteCountFormatter.string(fromByteCount: Int64(item.byteSize), countStyle: .file))
+            if let recognized = item.recognizedText, !recognized.isEmpty {
+                // Picture on top, the recognized text below it, in one scrollable view.
+                textScroll.isHidden = false
+                imagePreview.isHidden = true
+                textPreview.textStorage?.setAttributedString(Self.imageWithText(image, recognized, width: textScroll.contentSize.width - 30))
+                details.append("⌘T 拷贝图中文字")
+            } else {
+                textScroll.isHidden = true
+                imagePreview.isHidden = false
+                imagePreview.image = image
+                if item.recognizedText == nil && preferences.clipboardOCR {
+                    details.append("正在识别文字…")
+                    monitor.recognizeText(in: item)
+                }
+            }
         }
         textPreview.scrollToBeginningOfDocument(nil)
         detailLabel.stringValue = details.joined(separator: " · ")
+    }
+
+    static func imageWithText(_ image: NSImage?, _ text: String, width: CGFloat) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        if let image, image.size.width > 0 {
+            let attachment = NSTextAttachment()
+            attachment.image = image
+            let scale = min(1, max(width, 100) / image.size.width)
+            attachment.bounds = CGRect(x: 0, y: 0, width: image.size.width * scale, height: image.size.height * scale)
+            result.append(NSAttributedString(attachment: attachment))
+            result.append(NSAttributedString(string: "\n\n"))
+        }
+        result.append(NSAttributedString(string: "识别的文字\n", attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.secondaryLabelColor
+        ]))
+        result.append(NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor]))
+        return result
     }
 
     // MARK: Keyboard
@@ -307,6 +337,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         }
         switch key {
         case "p": togglePin(); return true
+        case "t": copyRecognizedText(); return true
         case ",": hide(); openSettings?(); return true
         case "w": hide(); return true
         default:
@@ -352,6 +383,17 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         if monitor.restore(item) {
             history.touch(item.id)
             statusLabel.stringValue = "已拷贝，可切换到其他应用粘贴"
+        }
+    }
+
+    private func copyRecognizedText() {
+        guard let item = selectedItem, item.kind == .image else { return }
+        guard let text = item.recognizedText, !text.isEmpty else {
+            statusLabel.stringValue = item.recognizedText == nil ? "仍在识别，请稍候" : "这张图片里没有识别到文字"
+            return
+        }
+        if monitor.restore(item, plainTextOnly: true) {
+            statusLabel.stringValue = "已拷贝图中文字（\(text.count) 字）"
         }
     }
 

@@ -48,6 +48,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         panel.keyHandler = { [weak self] event in self?.handleKey(event) ?? false }
         panel.onResignKey = { [weak self] in self?.panelLostFocus() }
         panel.quickLookProvider = self
+        preview.ocrStore = coordinator.ocrStore
     }
 
     // MARK: Showing and hiding
@@ -424,6 +425,7 @@ final class FilePreviewView: NSView {
     private let snippetLabel = NSTextField(wrappingLabelWithString: "")
     private var currentPath: String?
     private var currentNeedles: [String] = []
+    var ocrStore: OCRStore?
     private static let snippetQueue = DispatchQueue(label: "KongFetch.snippet", qos: .userInitiated)
 
     override init(frame: NSRect) {
@@ -509,8 +511,9 @@ final class FilePreviewView: NSView {
         snippetLabel.stringValue = "正在查找文中位置…"
         snippetLabel.textColor = .tertiaryLabelColor
         let path = url.path
+        let ocr = ocrStore
         Self.snippetQueue.async { [weak self] in
-            let outcome = ContentPreview.find(in: url, needles: needles)
+            let outcome = ContentPreview.find(in: url, needles: needles, ocr: ocr)
             DispatchQueue.main.async {
                 guard let self, self.currentPath == path, self.currentNeedles == needles else { return }
                 self.snippetLabel.textColor = .labelColor
@@ -521,8 +524,9 @@ final class FilePreviewView: NSView {
                     ])
                     text.addAttributes([.backgroundColor: NSColor.systemYellow.withAlphaComponent(0.45),
                                         .font: NSFont.systemFont(ofSize: 12, weight: .semibold)], range: found.snippet.highlight)
-                    if let page = found.page {
-                        text.insert(NSAttributedString(string: "第 \(page) 页：", attributes: [
+                    let label = (found.page.map { "第 \($0) 页" } ?? "") + (found.recognized ? "（识别文字）" : "")
+                    if !label.isEmpty {
+                        text.insert(NSAttributedString(string: label + "：", attributes: [
                             .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor
                         ]), at: 0)
                     }

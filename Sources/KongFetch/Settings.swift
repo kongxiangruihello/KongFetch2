@@ -28,6 +28,9 @@ final class AppStatus: ObservableObject {
         var pinyinIndexScanning = false
         var pinyinIndexUpdated: Date?
         var pinyinIndexRoots: [String] = []
+        var ocrRecognized = 0
+        var ocrProgress = OCRService.Progress()
+        var ocrPaused = false
     }
 
     @Published private(set) var snapshot = Snapshot()
@@ -61,6 +64,9 @@ struct SettingsActions {
     var revealDataFolder: () -> Void
     var requestFolderAccess: () -> Void
     var rebuildPinyinIndex: () -> Void
+    var ocrCheckNow: () -> Void
+    var ocrSetPaused: (Bool) -> Void
+    var ocrClear: () -> Void
 }
 
 struct SettingsView: View {
@@ -205,6 +211,43 @@ private struct SearchSettings: View {
                         .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+            Section("扫描件文字识别（OCR）") {
+                Toggle("识别扫描版 PDF 和图片中的文字，供全文搜索", isOn: $preferences.ocrEnabled)
+                if preferences.ocrEnabled {
+                    if preferences.ocrFolders.isEmpty {
+                        Text("还没有选择文件夹。请添加存放扫描书、讲义照片的文件夹。").foregroundColor(.secondary)
+                    }
+                    ForEach(preferences.ocrFolders, id: \.self) { folder in
+                        HStack {
+                            Text(PathDisplay.pretty((folder as NSString).expandingTildeInPath, home: NSHomeDirectory()))
+                            Spacer()
+                            Button("移除") { preferences.ocrFolders.removeAll { $0 == folder } }
+                        }
+                    }
+                    Button("添加文件夹…") { addOCRFolders() }
+                    Picker("每个 PDF 最多识别", selection: $preferences.ocrPageLimit) {
+                        Text("50 页").tag(50)
+                        Text("200 页").tag(200)
+                        Text("1000 页").tag(1000)
+                    }
+                    Toggle("只在接通电源时识别", isOn: $preferences.ocrOnlyOnPower)
+                    HStack {
+                        Text(ocrStatus).foregroundColor(.secondary).lineLimit(2)
+                        Spacer()
+                        Button(status.snapshot.ocrPaused ? "继续" : "暂停") { actions.ocrSetPaused(!status.snapshot.ocrPaused) }
+                        Button("立即检查") { actions.ocrCheckNow() }
+                    }
+                    if let error = status.snapshot.ocrProgress.lastError {
+                        Text("上次出错：\(error)").font(.caption).foregroundColor(.orange).lineLimit(2)
+                    }
+                    HStack {
+                        Text("识别在本机完成，不上传。带文字层的 PDF 交给 Spotlight，不重复识别；iCloud 中未下载的文件会跳过；竖排古籍效果有限。")
+                            .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("清除识别结果") { actions.ocrClear() }
+                    }
+                }
+            }
             Section("范围") {
                 Toggle("包含系统文件夹、“资源库”、隐藏文件夹和应用内部文件", isOn: $preferences.includeLibraryFolders)
                 VStack(alignment: .leading, spacing: 6) {
@@ -233,6 +276,32 @@ private struct SearchSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var ocrStatus: String {
+        let p = status.snapshot.ocrProgress
+        if let file = p.currentFile {
+            let page = p.currentPages > 1 ? "（第 \(p.currentPage)/\(p.currentPages) 页）" : ""
+            return "正在识别：\(file)\(page) · 剩余 \(p.pending) 个"
+        }
+        if let reason = p.pausedReason { return reason + (p.pending > 0 ? " · 待识别 \(p.pending) 个" : "") }
+        return "已识别 \(status.snapshot.ocrRecognized) 个文件" + (p.lastCheck.map { " · 上次检查 \($0.shortDescription)" } ?? "")
+    }
+
+    private func addOCRFolders() {
+        let panel = NSOpenPanel()
+        panel.title = "选择要识别扫描件的文件夹"
+        panel.prompt = "添加"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        var list = preferences.ocrFolders
+        for url in panel.urls {
+            let path = (url.path as NSString).abbreviatingWithTildeInPath
+            if !list.contains(path) { list.append(path) }
+        }
+        preferences.ocrFolders = list
     }
 
     private func addIndexFolders() {
@@ -269,6 +338,7 @@ private struct ClipboardSettings: View {
                 if preferences.clipboardShortcut != nil && !status.snapshot.clipboardHotKeyRegistered {
                     Text("这个组合已被系统或其他应用占用，请换一个。").font(.caption).foregroundColor(.orange)
                 }
+                Toggle("识别复制图片中的文字（可搜索；⇧↩ 或 ⌘T 取出文字）", isOn: $preferences.clipboardOCR)
                 Toggle("选中后直接粘贴到当前应用", isOn: $preferences.autoPaste)
                 if preferences.autoPaste {
                     HStack {

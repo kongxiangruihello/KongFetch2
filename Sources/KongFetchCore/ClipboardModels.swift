@@ -27,6 +27,8 @@ public struct ClipItem: Codable, Equatable, Identifiable {
     public var fingerprint: String
     /// Bytes this entry occupies: text plus blobs.
     public var byteSize: Int
+    /// Text recognized in an image entry (nil until recognized, empty if the image has none).
+    public var recognizedText: String?
 
     public var title: String {
         switch kind {
@@ -34,6 +36,9 @@ public struct ClipItem: Codable, Equatable, Identifiable {
             let flattened = (text ?? "").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\t", with: " ")
             return String(flattened.trimmingCharacters(in: .whitespaces).prefix(160))
         case .image:
+            if let recognized = recognizedText?.trimmingCharacters(in: .whitespacesAndNewlines), !recognized.isEmpty {
+                return "图片：" + String(recognized.replacingOccurrences(of: "\n", with: " ").prefix(120))
+            }
             if let w = imageWidth, let h = imageHeight { return "图片 \(w)×\(h)" }
             return "图片"
         case .files:
@@ -44,7 +49,8 @@ public struct ClipItem: Codable, Equatable, Identifiable {
     }
 
     public var searchText: String {
-        [text ?? "", (filePaths ?? []).joined(separator: " "), sourceName ?? "", kind == .image ? "图片 image" : ""].joined(separator: " ")
+        [text ?? "", (filePaths ?? []).joined(separator: " "), sourceName ?? "", kind == .image ? "图片 image" : "",
+         recognizedText ?? ""].joined(separator: " ")
     }
 
     static func isSafeBlobName(_ name: String) -> Bool {

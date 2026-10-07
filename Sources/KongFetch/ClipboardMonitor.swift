@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import Carbon.HIToolbox
 import KongFetchCore
 
@@ -22,6 +23,8 @@ final class ClipboardMonitor {
     private var lastChangeCount: Int
     /// Short note about the last skipped or reduced copy, shown in the panel footer.
     private(set) var lastNotice: String?
+    private let recognitionQueue = DispatchQueue(label: "KongFetch.clipboard-ocr", qos: .utility)
+    private var recognitionRequested = Set<UUID>()
 
     init(history: ClipboardHistory, preferences: Preferences, pasteboard: NSPasteboard = .general) {
         self.history = history
@@ -70,7 +73,14 @@ final class ClipboardMonitor {
         guard let candidate = capture(source: source) else { return }
         // Someone may have copied again while we were reading.
         guard pasteboard.changeCount == change else { return }
-        if case .rejected(let reason) = history.insert(candidate) { lastNotice = reason }
+        switch history.insert(candidate) {
+        case .rejected(let reason):
+            lastNotice = reason
+        case .added(let id):
+            if let item = history.items.first(where: { $0.id == id }) { recognizeText(in: item) }
+        case .merged:
+            break
+        }
     }
 
     private func capture(source: (bundleID: String?, name: String?)) -> ClipCandidate? {
@@ -120,7 +130,30 @@ final class ClipboardMonitor {
 
     /// Puts an entry back on the pasteboard. Returns false if its data is gone.
     @discardableResult
+    /// Recognizes text in an image entry in the background (once per entry per run).
+    func recognizeText(in item: ClipItem) {
+        guard preferences.clipboardOCR, item.kind == .image, item.recognizedText == nil,
+              !recognitionRequested.contains(item.id), let name = item.imageFile, let url = history.store.blobURL(name) else { return }
+        recognitionRequested.insert(item.id)
+        recognitionQueue.async { [weak self] in
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return }
+            let text = (try? TextRecognizer.recognize(image)) ?? ""
+            DispatchQueue.main.async { self?.history.setRecognizedText(item.id, text) }
+        }
+    }
+
     func restore(_ item: ClipItem, plainTextOnly: Bool = false) -> Bool {
+        // "Paste as plain text" on a picture pastes the text recognized in it.
+        if plainTextOnly, item.kind == .image, let text = item.recognizedText, !text.isEmpty {
+            let entry = NSPasteboardItem()
+            entry.setString(text, forType: .string)
+            entry.setString("1", forType: Self.restoredMarker)
+            pasteboard.clearContents()
+            let ok = pasteboard.writeObjects([entry])
+            lastChangeCount = pasteboard.changeCount
+            return ok
+        }
         let entry = NSPasteboardItem()
         switch item.kind {
         case .text:
