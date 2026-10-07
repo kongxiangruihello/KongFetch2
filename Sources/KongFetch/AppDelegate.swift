@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var folderAccessCache: (checked: Date, state: [String: Bool], fullDisk: Bool)?
     private var pinyinIndex: PinyinIndexService!
     private var ocr: OCRService!
+    private var updater: Updater!
 
     static var supportDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -38,6 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clipboardMonitor = ClipboardMonitor(history: clipboardHistory, preferences: preferences)
         pinyinIndex = PinyinIndexService(cacheURL: support.appendingPathComponent("pinyin-index.txt"))
         pinyinIndex.onChange = { [weak self] in self?.status.refresh() }
+        updater = Updater(supportDirectory: support)
+        updater.onChange = { [weak self] in self?.status.refresh() }
+        if preferences.autoCheckUpdates { updater.startAutomaticChecks() }
         ocr = OCRService(directory: support.appendingPathComponent("OCR", isDirectory: true))
         ocr.onChange = { [weak self] in self?.status.refresh() }
         searchPanel = SearchPanelController(coordinator: FileSearchCoordinator(recents: recents, preferences: preferences,
@@ -145,6 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.ocr.configure(self.ocrSettings)
             }
             .store(in: &subscriptions)
+        preferences.$autoCheckUpdates.dropFirst().sink { [weak self] enabled in
+            if enabled { self?.updater.startAutomaticChecks() } else { self?.updater.stopAutomaticChecks() }
+        }.store(in: &subscriptions)
         preferences.$clipboardEnabled.dropFirst().sink { [weak self] enabled in
             if enabled { self?.clipboardMonitor.skipCurrentContents() }
         }.store(in: &subscriptions)
@@ -208,6 +215,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let warning = menu.addItem(withTitle: "⚠︎ 连按 \(preferences.doubleTapModifier.title) 未生效，点此查看", action: #selector(openSettingsAction), keyEquivalent: "")
             warning.target = self
         }
+        switch updater.state.phase {
+        case .updating(let step):
+            menu.addItem(withTitle: "正在更新：" + step, action: nil, keyEquivalent: "")
+        default:
+            if !updater.state.pending.isEmpty {
+                let item = menu.addItem(withTitle: "安装更新（\(updater.state.pending.count) 项）…", action: #selector(installUpdateFromMenu), keyEquivalent: "")
+                item.target = self
+            }
+        }
         let settings = menu.addItem(withTitle: "设置…", action: #selector(openSettingsAction), keyEquivalent: ",")
         settings.target = self
         menu.addItem(.separator())
@@ -244,7 +260,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 rebuildPinyinIndex: { [weak self] in self?.pinyinIndex.rebuild(); self?.status.refresh() },
                 ocrCheckNow: { [weak self] in self?.ocr.checkNow() },
                 ocrSetPaused: { [weak self] paused in self?.ocr.setPaused(paused); self?.status.refresh() },
-                ocrClear: { [weak self] in self?.ocr.clearResults() }
+                ocrClear: { [weak self] in self?.ocr.clearResults() },
+                checkForUpdates: { [weak self] in self?.updater.clearFailure(); self?.updater.check() },
+                installUpdate: { [weak self] in self?.updater.update() },
+                rollbackUpdate: { [weak self] in self?.confirmRollback() },
+                showUpdateLog: { [weak self] in
+                    guard let url = self?.updater.logURL, FileManager.default.fileExists(atPath: url.path) else { return }
+                    NSWorkspace.shared.open(url)
+                }
             )
             settingsWindow = SettingsWindowController(preferences: preferences, status: status, actions: actions)
         }
@@ -278,7 +301,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.ocrRecognized = ocr.store.recognizedDocumentCount
         s.ocrProgress = ocr.progress
         s.ocrPaused = ocr.paused
+        s.update = updater.state
         return s
+    }
+
+    // MARK: Updates
+
+    @objc private func installUpdateFromMenu() {
+        let pending = updater.state.pending
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "安装 KongFetch 更新？"
+        alert.informativeText = pending.prefix(10).map { "• " + $0 }.joined(separator: "\n") +
+            "\n\n将在本机编译（约一两分钟），完成后 KongFetch 会自动重新打开。"
+        alert.addButton(withTitle: "更新")
+        alert.addButton(withTitle: "以后")
+        if alert.runModal() == .alertFirstButtonReturn {
+            updater.update()
+            openSettings()
+        } else {
+            NSApp.hide(nil)
+        }
+    }
+
+    private func confirmRollback() {
+        guard let latest = updater.state.backups.first else { return }
+        let alert = NSAlert()
+        alert.messageText = "回退到 \(latest.replacingOccurrences(of: ".app", with: ""))？"
+        alert.informativeText = "KongFetch 会退出并打开上一版。设置和数据不受影响。"
+        alert.addButton(withTitle: "回退")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn { updater.rollback() }
     }
 
     private var ocrSettings: OCRService.Settings {

@@ -50,6 +50,8 @@ cp "$root/Resources/Info.plist" "$app/Contents/Info.plist"
 cp "$root/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 build_number="$(git -C "$root" rev-list --count HEAD 2>/dev/null || echo 1)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app/Contents/Info.plist"
+# Lets the app find its source folder for in-app updates.
+/usr/libexec/PlistBuddy -c "Add :KFSourceRoot string $root" "$app/Contents/Info.plist"
 
 xattr -cr "$app"
 

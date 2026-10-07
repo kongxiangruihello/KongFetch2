@@ -35,6 +35,7 @@ final class Preferences: ObservableObject {
     @Published var ocrDownloadFromICloud: Bool { didSet { defaults.set(ocrDownloadFromICloud, forKey: key("ocrDownloadFromICloud")) } }
     @Published var clipboardExcludedApps: [String] { didSet { defaults.set(clipboardExcludedApps, forKey: key("clipboardExcludedApps")) } }
 
+    @Published var autoCheckUpdates: Bool { didSet { defaults.set(autoCheckUpdates, forKey: key("autoCheckUpdates")) } }
     @Published var hasCompletedFirstLaunch: Bool { didSet { defaults.set(hasCompletedFirstLaunch, forKey: key("hasCompletedFirstLaunch")) } }
     /// Whether KongFetch has asked for access to Documents, Desktop, Downloads and iCloud Drive.
     @Published var folderAccessRequested: Bool { didSet { defaults.set(folderAccessRequested, forKey: key("folderAccessRequested")) } }
@@ -68,6 +69,7 @@ final class Preferences: ObservableObject {
         ocrOnlyOnPower = value("ocrOnlyOnPower", true)
         ocrDownloadFromICloud = value("ocrDownloadFromICloud", false)
         hasCompletedFirstLaunch = value("hasCompletedFirstLaunch", false)
+        autoCheckUpdates = value("autoCheckUpdates", true)
         folderAccessRequested = value("folderAccessRequested", false)
     }
 

@@ -31,6 +31,7 @@ final class AppStatus: ObservableObject {
         var ocrRecognized = 0
         var ocrProgress = OCRService.Progress()
         var ocrPaused = false
+        var update = Updater.State()
     }
 
     @Published private(set) var snapshot = Snapshot()
@@ -67,6 +68,10 @@ struct SettingsActions {
     var ocrCheckNow: () -> Void
     var ocrSetPaused: (Bool) -> Void
     var ocrClear: () -> Void
+    var checkForUpdates: () -> Void
+    var installUpdate: () -> Void
+    var rollbackUpdate: () -> Void
+    var showUpdateLog: () -> Void
 }
 
 struct SettingsView: View {
@@ -82,6 +87,8 @@ struct SettingsView: View {
                 .tabItem { Label("搜索", systemImage: "magnifyingglass") }
             ClipboardSettings(preferences: preferences, status: status, actions: actions)
                 .tabItem { Label("剪贴板", systemImage: "doc.on.clipboard") }
+            UpdateSettings(preferences: preferences, status: status, actions: actions)
+                .tabItem { Label("更新", systemImage: "arrow.triangle.2.circlepath") }
             DiagnosticsView(preferences: preferences, status: status, actions: actions)
                 .tabItem { Label("诊断", systemImage: "stethoscope") }
         }
@@ -230,7 +237,7 @@ private struct SearchSettings: View {
                     Toggle("只在接通电源时识别", isOn: $preferences.ocrOnlyOnPower)
                     Toggle("自动下载只存于 iCloud 的文件再识别（占用本机空间）", isOn: $preferences.ocrDownloadFromICloud)
                     HStack {
-                        Text(ocrStatus).foregroundColor(.secondary).lineLimit(2)
+                        Text(ocrStatus).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
                         Spacer()
                         Button(status.snapshot.ocrPaused ? "继续" : "暂停") { actions.ocrSetPaused(!status.snapshot.ocrPaused) }
                         Button("立即检查") { actions.ocrCheckNow() }
@@ -426,6 +433,75 @@ private struct ClipboardSettings: View {
             return (FileManager.default.displayName(atPath: url.path) as NSString).deletingPathExtension
         }
         return "（未安装）"
+    }
+}
+
+private struct UpdateSettings: View {
+    @ObservedObject var preferences: Preferences
+    @ObservedObject var status: AppStatus
+    let actions: SettingsActions
+
+    var body: some View {
+        let update = status.snapshot.update
+        Form {
+            Section {
+                LabeledContent("当前版本", value: status.snapshot.version)
+                LabeledContent("源码文件夹") {
+                    Text(update.sourceRoot.map { PathDisplay.pretty($0, home: NSHomeDirectory()) } ?? "未找到")
+                        .foregroundColor(update.sourceRoot == nil ? .orange : .secondary)
+                }
+                Toggle("自动检查更新（启动时和每 6 小时）", isOn: $preferences.autoCheckUpdates)
+            }
+            Section("状态") {
+                switch update.phase {
+                case .checking:
+                    HStack { ProgressView().controlSize(.small); Text("正在检查 GitHub…") }
+                case .updating(let step):
+                    HStack { ProgressView().controlSize(.small); Text(step) }
+                case .failed(let message):
+                    Text(message).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
+                case .idle:
+                    if update.pending.isEmpty {
+                        Text("已是最新" + (update.lastCheck.map { " · 上次检查 \($0.shortDescription)" } ?? ""))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("有 \(update.pending.count) 项更新：").font(.headline)
+                        ForEach(Array(update.pending.prefix(8).enumerated()), id: \.offset) { _, subject in
+                            Text("• " + subject).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                HStack {
+                    Button("检查更新") { actions.checkForUpdates() }
+                    Button("立即更新") { actions.installUpdate() }
+                        .disabled(update.pending.isEmpty || isBusy(update.phase))
+                        .keyboardShortcut(.defaultAction)
+                    Spacer()
+                    Button("查看日志") { actions.showUpdateLog() }
+                }
+            }
+            Section("回退") {
+                if let latest = update.backups.first {
+                    HStack {
+                        Text("上一版：" + latest.replacingOccurrences(of: ".app", with: ""))
+                        Spacer()
+                        Button("回退到上一版") { actions.rollbackUpdate() }.disabled(isBusy(update.phase))
+                    }
+                } else {
+                    Text("更新前会自动备份当前版本，之后可以在这里回退。").foregroundColor(.secondary)
+                }
+            }
+            Text("更新会在本机拉取 GitHub 上的代码、编译并用同一证书签名，签名不一致时拒绝安装，因此已授予的权限保持不变。")
+                .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .formStyle(.grouped)
+    }
+
+    private func isBusy(_ phase: Updater.Phase) -> Bool {
+        switch phase {
+        case .checking, .updating: return true
+        default: return false
+        }
     }
 }
 
