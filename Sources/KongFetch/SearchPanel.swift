@@ -63,6 +63,8 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         panel.present()
         panel.makeFirstResponder(field)
         if field.stringValue.isEmpty {
+            // A fresh search starts by name; full-text stays on only while a query is being refined.
+            if contentMode { toggleMode() }
             showRecents()
         } else {
             field.currentEditor()?.selectAll(nil)
