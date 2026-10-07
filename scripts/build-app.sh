@@ -39,14 +39,19 @@ echo "== compile =="
 xcrun swift build -c release
 bin_dir="$(xcrun swift build -c release --show-bin-path)"
 
-app="$root/build/KongFetch.app"
-rm -rf "$app"
+# Assemble and sign outside the project folder: if it lives in iCloud Drive ("Desktop & Documents" sync),
+# files there pick up extended attributes that codesign rejects ("resource fork, Finder information… not allowed").
+staging="$(mktemp -d "${TMPDIR:-/tmp}/kongfetch-build.XXXXXX")"
+trap 'rm -rf "$staging"' EXIT
+app="$staging/KongFetch.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/KongFetch" "$app/Contents/MacOS/KongFetch"
 cp "$root/Resources/Info.plist" "$app/Contents/Info.plist"
 cp "$root/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 build_number="$(git -C "$root" rev-list --count HEAD 2>/dev/null || echo 1)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app/Contents/Info.plist"
+
+xattr -cr "$app"
 
 echo "== sign =="
 identity="${KONGFETCH_SIGN_IDENTITY:-KongFetch Local Signing}"
@@ -60,6 +65,10 @@ else
 fi
 codesign --verify --strict "$app" || echo "NOTE: codesign --verify reported a trust warning (normal for a self-signed certificate)."
 codesign --display -r - "$app" 2>&1 | grep designated || true
+
+# Keep a copy in ./build for reference.
+rm -rf "$root/build/KongFetch.app"
+ditto "$app" "$root/build/KongFetch.app"
 
 if [[ $install -eq 1 ]]; then
   echo "== install =="
@@ -84,4 +93,4 @@ if [[ $install -eq 1 ]]; then
 fi
 
 echo "== done =="
-echo "Built: $app"
+echo "Built: $root/build/KongFetch.app"
