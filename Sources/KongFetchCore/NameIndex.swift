@@ -134,6 +134,10 @@ public enum NameIndexScanner {
         guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys,
                                                               options: [.skipsHiddenFiles, .skipsPackageDescendants],
                                                               errorHandler: { _, _ in true }) else { return result }
+        // The enumerator may report resolved paths (e.g. /private/var for /var); keep the caller's spelling
+        // so entries line up with the root and with later updates.
+        let rootPath = root.path
+        let resolvedRoot = realPath(rootPath)
         var visited = 0
         for case let url as URL in enumerator {
             visited += 1
@@ -144,8 +148,19 @@ public enum NameIndexScanner {
                 enumerator.skipDescendants()
                 continue
             }
-            if let entry = entry(for: url, isDirectory: isDirectory) { result.append(entry) }
+            var itemURL = url
+            let path = url.path
+            if !path.hasPrefix(rootPath + "/"), let resolvedRoot, path.hasPrefix(resolvedRoot + "/") {
+                itemURL = URL(fileURLWithPath: rootPath + path.dropFirst(resolvedRoot.count))
+            }
+            if let entry = entry(for: itemURL, isDirectory: isDirectory) { result.append(entry) }
         }
         return result
+    }
+
+    static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 }
