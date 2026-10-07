@@ -32,6 +32,7 @@ final class Preferences: ObservableObject {
     @Published var ocrFolders: [String] { didSet { defaults.set(ocrFolders, forKey: key("ocrFolders")) } }
     @Published var ocrPageLimit: Int { didSet { defaults.set(ocrPageLimit, forKey: key("ocrPageLimit")) } }
     @Published var ocrOnlyOnPower: Bool { didSet { defaults.set(ocrOnlyOnPower, forKey: key("ocrOnlyOnPower")) } }
+    @Published var ocrDownloadFromICloud: Bool { didSet { defaults.set(ocrDownloadFromICloud, forKey: key("ocrDownloadFromICloud")) } }
     @Published var clipboardExcludedApps: [String] { didSet { defaults.set(clipboardExcludedApps, forKey: key("clipboardExcludedApps")) } }
 
     @Published var hasCompletedFirstLaunch: Bool { didSet { defaults.set(hasCompletedFirstLaunch, forKey: key("hasCompletedFirstLaunch")) } }
@@ -65,6 +66,7 @@ final class Preferences: ObservableObject {
         ocrFolders = value("ocrFolders", [String]())
         ocrPageLimit = value("ocrPageLimit", 200)
         ocrOnlyOnPower = value("ocrOnlyOnPower", true)
+        ocrDownloadFromICloud = value("ocrDownloadFromICloud", false)
         hasCompletedFirstLaunch = value("hasCompletedFirstLaunch", false)
         folderAccessRequested = value("folderAccessRequested", false)
     }

@@ -12,6 +12,8 @@ final class OCRService {
         var folders: [String] = []
         var pageLimit = 200
         var onlyOnPower = true
+        /// Ask iCloud to download files that are only in the cloud, then recognize them.
+        var downloadFromICloud = false
     }
 
     /// Progress, read on the main thread.
@@ -25,6 +27,8 @@ final class OCRService {
         var lastCheck: Date?
         /// Files that needed recognition at the last check.
         var lastFound = 0
+        /// Files skipped at the last check because they are only in iCloud.
+        var lastInCloud = 0
     }
 
     let store: OCRStore
@@ -85,8 +89,23 @@ final class OCRService {
             self.store.prune { path in
                 folders.contains { path.hasPrefix($0 + "/") } && FileManager.default.fileExists(atPath: path)
             }
-            let candidates = folders.flatMap { self.candidates(in: $0, pageLimit: settings.pageLimit) }
-            self.update { $0.pending = candidates.count; $0.lastCheck = Date(); $0.lastFound = candidates.count }
+            var inCloud: [URL] = []
+            var candidates: [URL] = []
+            for folder in folders {
+                let found = self.candidates(in: folder, pageLimit: settings.pageLimit)
+                candidates += found.local
+                inCloud += found.inCloud
+            }
+            if settings.downloadFromICloud && !inCloud.isEmpty {
+                for url in inCloud { try? FileManager.default.startDownloadingUbiquitousItem(at: url) }
+                // Look again once the downloads have had time to finish.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 180) { [weak self] in
+                    if current == self?.generation { self?.checkNow() }
+                }
+            }
+            self.update {
+                $0.pending = candidates.count; $0.lastCheck = Date(); $0.lastFound = candidates.count; $0.lastInCloud = inCloud.count
+            }
             for (index, url) in candidates.enumerated() {
                 guard current == self.generation else { return }
                 if settings.onlyOnPower && !Self.isOnACPower {
@@ -116,23 +135,27 @@ final class OCRService {
     // MARK: Work (on `queue`)
 
     /// Files in a folder that are scanned PDFs or images and are not yet recognized as they are now.
-    private func candidates(in folder: String, pageLimit: Int) -> [URL] {
+    private func candidates(in folder: String, pageLimit: Int) -> (local: [URL], inCloud: [URL]) {
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey, .ubiquitousItemDownloadingStatusKey]
         guard let enumerator = FileManager.default.enumerator(at: URL(fileURLWithPath: folder), includingPropertiesForKeys: keys,
-                                                              options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
+                                                              options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return ([], []) }
         var result: [URL] = []
+        var inCloud: [URL] = []
         for case let url as URL in enumerator {
             let ext = url.pathExtension.lowercased()
             guard ext == "pdf" || Self.imageExtensions.contains(ext),
                   let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { continue }
             // Never force iCloud downloads; files appear here once they are on this Mac.
-            if values.ubiquitousItemDownloadingStatus == .notDownloaded { continue }
+            if values.ubiquitousItemDownloadingStatus == .notDownloaded {
+                inCloud.append(url)
+                continue
+            }
             let size = values.fileSize ?? 0
             guard size > 2_000, size < 500_000_000 else { continue }
             if store.isCurrent(path: url.path, size: size, modified: values.contentModificationDate ?? .distantPast, pageLimit: pageLimit) { continue }
             result.append(url)
         }
-        return result
+        return (result, inCloud)
     }
 
     private func recognize(_ url: URL, pageLimit: Int, generation: Int) {

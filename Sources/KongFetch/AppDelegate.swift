@@ -283,7 +283,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var ocrSettings: OCRService.Settings {
         OCRService.Settings(enabled: preferences.ocrEnabled, folders: preferences.ocrFolders,
-                            pageLimit: preferences.ocrPageLimit, onlyOnPower: preferences.ocrOnlyOnPower)
+                            pageLimit: preferences.ocrPageLimit, onlyOnPower: preferences.ocrOnlyOnPower,
+                            downloadFromICloud: preferences.ocrDownloadFromICloud)
     }
 
     // MARK: Pinyin index

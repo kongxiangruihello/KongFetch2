@@ -228,6 +228,7 @@ private struct SearchSettings: View {
                         Text("1000 页").tag(1000)
                     }
                     Toggle("只在接通电源时识别", isOn: $preferences.ocrOnlyOnPower)
+                    Toggle("自动下载只存于 iCloud 的文件再识别（占用本机空间）", isOn: $preferences.ocrDownloadFromICloud)
                     HStack {
                         Text(ocrStatus).foregroundColor(.secondary).lineLimit(2)
                         Spacer()
@@ -282,7 +283,11 @@ private struct SearchSettings: View {
             return "正在识别：\(file)\(page) · 剩余 \(p.pending) 个"
         }
         if let reason = p.pausedReason { return reason + (p.pending > 0 ? " · 待识别 \(p.pending) 个" : "") }
-        return "已识别 \(status.snapshot.ocrRecognized) 个文件" + (p.lastCheck.map { " · 上次检查 \($0.shortDescription)，发现 \(p.lastFound) 个待识别" } ?? "")
+        let cloud = p.lastInCloud > 0
+            ? (preferences.ocrDownloadFromICloud ? "，\(p.lastInCloud) 个正从 iCloud 下载" : "，\(p.lastInCloud) 个只在 iCloud 中未下载（已跳过）")
+            : ""
+        return "已识别 \(status.snapshot.ocrRecognized) 个文件" +
+            (p.lastCheck.map { " · 上次检查 \($0.shortDescription)，发现 \(p.lastFound) 个待识别" } ?? "") + cloud
     }
 
     private func addOCRFolders() {
