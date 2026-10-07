@@ -34,7 +34,8 @@ enum ContentPreview {
         let ext = url.pathExtension.lowercased()
         guard ext == "pdf" || plainTextExtensions.contains(ext) || richTextExtensions.contains(ext) else { return .unsupported }
         let values = try? url.resourceValues(forKeys: [.fileSizeKey, .ubiquitousItemDownloadingStatusKey])
-        if let status = values?.ubiquitousItemDownloadingStatus, status != .current {
+        // "downloaded" and "current" both mean the data is on this Mac.
+        if values?.ubiquitousItemDownloadingStatus == .notDownloaded {
             return .notDownloaded
         }
         let size = values?.fileSize ?? 0

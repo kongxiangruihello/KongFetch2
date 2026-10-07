@@ -23,6 +23,8 @@ final class OCRService {
         var pausedReason: String?
         var lastError: String?
         var lastCheck: Date?
+        /// Files that needed recognition at the last check.
+        var lastFound = 0
     }
 
     let store: OCRStore
@@ -84,7 +86,7 @@ final class OCRService {
                 folders.contains { path.hasPrefix($0 + "/") } && FileManager.default.fileExists(atPath: path)
             }
             let candidates = folders.flatMap { self.candidates(in: $0, pageLimit: settings.pageLimit) }
-            self.update { $0.pending = candidates.count; $0.lastCheck = Date() }
+            self.update { $0.pending = candidates.count; $0.lastCheck = Date(); $0.lastFound = candidates.count }
             for (index, url) in candidates.enumerated() {
                 guard current == self.generation else { return }
                 if settings.onlyOnPower && !Self.isOnACPower {
@@ -124,7 +126,7 @@ final class OCRService {
             guard ext == "pdf" || Self.imageExtensions.contains(ext),
                   let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { continue }
             // Never force iCloud downloads; files appear here once they are on this Mac.
-            if let status = values.ubiquitousItemDownloadingStatus, status != .current { continue }
+            if values.ubiquitousItemDownloadingStatus == .notDownloaded { continue }
             let size = values.fileSize ?? 0
             guard size > 2_000, size < 500_000_000 else { continue }
             if store.isCurrent(path: url.path, size: size, modified: values.contentModificationDate ?? .distantPast, pageLimit: pageLimit) { continue }

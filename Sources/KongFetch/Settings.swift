@@ -192,11 +192,8 @@ private struct SearchSettings: View {
                         Spacer()
                         Button("重建") { actions.rebuildPinyinIndex() }
                     }
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(status.snapshot.pinyinIndexRoots, id: \.self) { root in
-                            Text(PathDisplay.pretty(root, home: NSHomeDirectory())).font(.caption).foregroundColor(.secondary)
-                        }
-                    }
+                    Text(status.snapshot.pinyinIndexRoots.map { PathDisplay.pretty($0, home: NSHomeDirectory()) }.joined(separator: "、"))
+                        .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
                     if !preferences.pinyinIndexExtraRoots.isEmpty {
                         ForEach(preferences.pinyinIndexExtraRoots, id: \.self) { root in
                             HStack {
@@ -285,7 +282,7 @@ private struct SearchSettings: View {
             return "正在识别：\(file)\(page) · 剩余 \(p.pending) 个"
         }
         if let reason = p.pausedReason { return reason + (p.pending > 0 ? " · 待识别 \(p.pending) 个" : "") }
-        return "已识别 \(status.snapshot.ocrRecognized) 个文件" + (p.lastCheck.map { " · 上次检查 \($0.shortDescription)" } ?? "")
+        return "已识别 \(status.snapshot.ocrRecognized) 个文件" + (p.lastCheck.map { " · 上次检查 \($0.shortDescription)，发现 \(p.lastFound) 个待识别" } ?? "")
     }
 
     private func addOCRFolders() {
