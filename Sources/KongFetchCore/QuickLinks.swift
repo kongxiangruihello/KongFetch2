@@ -19,15 +19,25 @@ public struct QuickLink: Codable, Equatable, Identifiable {
         self.fallback = fallback
     }
 
-    /// The address for a query, or nil if the template is not a usable web address.
+    /// Schemes that must never be opened from a typed query.
+    static let blockedSchemes: Set<String> = ["file", "javascript", "data", "about", "ftp"]
+
+    /// The address for a query, or nil if the template is not usable. Web addresses need a host; other apps'
+    /// links (kongreview://add?text={query}) are allowed too.
     public func url(for query: String) -> URL? {
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
-        let encoded = query.trimmingCharacters(in: .whitespaces).addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
+        let encoded = QuickLink.encode(query.trimmingCharacters(in: .whitespaces))
         let address = template.contains("{query}") ? template.replacingOccurrences(of: "{query}", with: encoded) : template + encoded
-        guard let url = URL(string: address), let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme), url.host != nil else {
+        guard let url = URL(string: address), let scheme = url.scheme?.lowercased(), !Self.blockedSchemes.contains(scheme) else {
             return nil
         }
-        return url
+        if scheme == "http" || scheme == "https" { return url.host != nil ? url : nil }
+        return scheme.allSatisfy({ $0.isLetter || $0.isNumber || "+-.".contains($0) }) ? url : nil
+    }
+
+    /// Percent-encodes everything except unreserved characters, so "&", "=", "+" and "#" survive in a query value.
+    public static func encode(_ value: String) -> String {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
     }
 }
 
@@ -41,8 +51,13 @@ public enum QuickLinks {
         QuickLink(keyword: "db", name: "豆瓣读书", template: "https://search.douban.com/book/subject_search?search_text={query}"),
         QuickLink(keyword: "gs", name: "Google 学术", template: "https://scholar.google.com/scholar?q={query}"),
         QuickLink(keyword: "wk", name: "维基百科", template: "https://zh.wikipedia.org/w/index.php?search={query}"),
-        QuickLink(keyword: "bk", name: "百度百科", template: "https://baike.baidu.com/item/{query}")
+        QuickLink(keyword: "bk", name: "百度百科", template: "https://baike.baidu.com/item/{query}"),
+        QuickLink(keyword: "kr", name: "KongReview 摘录", template: "kongreview://add?text={query}")
     ]
+
+    /// Links added to the defaults after the first release, keyed by the version that added them, so they
+    /// can be offered to people who already have their own list.
+    public static let addedLater: [(version: Int, keyword: String)] = [(2, "kr")]
 
     /// Splits "hd 仁" into the link whose keyword is "hd" and the query "仁". Keywords ignore case.
     public static func match(_ text: String, in links: [QuickLink]) -> (link: QuickLink, query: String)? {

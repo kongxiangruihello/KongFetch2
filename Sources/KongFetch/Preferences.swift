@@ -11,6 +11,8 @@ final class Preferences: ObservableObject {
 
     @Published var searchShortcut: Shortcut? { didSet { store(searchShortcut, "searchShortcut") } }
     @Published var clipboardShortcut: Shortcut? { didSet { store(clipboardShortcut, "clipboardShortcut") } }
+    /// Sends the selected text to KongReview.
+    @Published var captureShortcut: Shortcut? { didSet { store(captureShortcut, "captureShortcut") } }
     /// Looks up the selected text in the dictionary.
     @Published var lookupShortcut: Shortcut? { didSet { store(lookupShortcut, "lookupShortcut") } }
     @Published var doubleTapModifier: TapModifier { didSet { defaults.set(doubleTapModifier.rawValue, forKey: key("doubleTapModifier")) } }
@@ -64,6 +66,7 @@ final class Preferences: ObservableObject {
         searchShortcut = Self.loadShortcut(defaults, "searchShortcut") ?? Shortcut.defaultSearch
         clipboardShortcut = Self.loadShortcut(defaults, "clipboardShortcut") ?? Shortcut.defaultClipboard
         lookupShortcut = Self.loadShortcut(defaults, "lookupShortcut") ?? Shortcut.defaultLookup
+        captureShortcut = Self.loadShortcut(defaults, "captureShortcut").flatMap { $0 }
         doubleTapModifier = TapModifier(rawValue: value("doubleTapModifier", "control")) ?? .control
         excludedPathPrefixes = value("excludedPathPrefixes", [String]())
         includeLibraryFolders = value("includeLibraryFolders", false)
@@ -83,8 +86,18 @@ final class Preferences: ObservableObject {
         ocrDownloadFromICloud = value("ocrDownloadFromICloud", false)
         cleanupOperations = (defaults.array(forKey: "kf4.cleanupOperations") as? [String])?
             .compactMap(TextCleanup.Operation.init(rawValue:)) ?? TextCleanup.defaultOperations
-        quickLinks = defaults.data(forKey: "kf4.quickLinks").flatMap { try? JSONDecoder().decode([QuickLink].self, from: $0) }
+        var links = defaults.data(forKey: "kf4.quickLinks").flatMap { try? JSONDecoder().decode([QuickLink].self, from: $0) }
             ?? QuickLinks.defaults
+        // Offer links added in later versions to people who already had a list.
+        let linksVersion = defaults.integer(forKey: "kf4.quickLinksVersion")
+        for added in QuickLinks.addedLater where added.version > linksVersion {
+            if !links.contains(where: { $0.keyword.lowercased() == added.keyword }),
+               let link = QuickLinks.defaults.first(where: { $0.keyword == added.keyword }) {
+                links.append(link)
+            }
+        }
+        quickLinks = links
+        defaults.set(QuickLinks.addedLater.map(\.version).max() ?? 1, forKey: "kf4.quickLinksVersion")
         snippetExpansion = value("snippetExpansion", true)
         hasCompletedFirstLaunch = value("hasCompletedFirstLaunch", false)
         autoCheckUpdates = value("autoCheckUpdates", true)

@@ -15,6 +15,8 @@ final class AppStatus: ObservableObject {
         var searchHotKeyRegistered = false
         var clipboardHotKeyRegistered = false
         var lookupHotKeyRegistered = false
+        var captureHotKeyRegistered = false
+        var kongReviewInstalled = false
         var loginItemEnabled = false
         var loginItemNote = ""
         var signing = ""
@@ -144,6 +146,17 @@ private struct GeneralSettings: View {
                 }
                 Text("在任何应用中选中字词后按此快捷键，用系统词典查询；也可以在搜索窗口输入“cd 仁”。")
                     .font(.caption).foregroundColor(.secondary)
+                if status.snapshot.kongReviewInstalled {
+                    LabeledContent("摘录所选文字到 KongReview") {
+                        ShortcutRecorder(shortcut: $preferences.captureShortcut)
+                            .frame(width: 220, height: 24)
+                    }
+                    if preferences.captureShortcut != nil && !status.snapshot.captureHotKeyRegistered {
+                        Text("这个组合已被系统或其他应用占用，请换一个。").font(.caption).foregroundColor(.orange)
+                    }
+                    Text("选中文字后按此快捷键，打开 KongReview 的快速录入浮窗并填好正文（PDF 等文档会带上文件名作出处），确认后再保存。剪贴板窗口 ⌘K 菜单和搜索窗口“kr 文字”也可以送去。")
+                        .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 Picker("连按两次唤起", selection: $preferences.doubleTapModifier) {
                     ForEach(TapModifier.allCases) { Text($0.title).tag($0) }
                 }

@@ -463,6 +463,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         case "j": pasteCleaned(preferences.cleanupOperations); return true
         case "e": togglePreviewCleaned(); return true
         case "k": showActionMenu(); return true
+        case "r" where KongReviewLink.isInstalled: sendToKongReview(); return true
         case ",": hide(); openSettings?(); return true
         case "w": hide(); return true
         default:
@@ -550,6 +551,9 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         single.isEnabled = hasText
         menu.addItem(single)
         add(menu, previewCleaned ? "关闭整理预览" : "预览整理效果", "e", #selector(menuTogglePreview), enabled: hasText)
+        if KongReviewLink.isInstalled {
+            add(menu, "送到 KongReview 摘录", "r", #selector(menuSendToKongReview), enabled: hasText)
+        }
         menu.addItem(.separator())
         add(menu, "粘贴为纯文本", "\r", #selector(menuPastePlain), enabled: item != nil, modifiers: [.shift])
         add(menu, "仅拷贝，不粘贴", "\r", #selector(menuCopyOnly), enabled: item != nil)
@@ -593,6 +597,15 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         pasteCleaned([operation])
     }
     @objc private func menuTogglePreview() { togglePreviewCleaned() }
+    @objc private func menuSendToKongReview() { sendToKongReview() }
+
+    /// Opens KongReview's capture window with the selected text (tidied as ⌘J would, when preview is on).
+    private func sendToKongReview() {
+        guard let item = selectedItem, let text = monitor.plainText(of: item), !text.isEmpty else { return }
+        let content = previewCleaned ? TextCleanup.apply(preferences.cleanupOperations, to: text) : text
+        hide()
+        KongReviewLink.send(text: content)
+    }
     @objc private func menuPastePlain() { paste(plainText: true) }
     @objc private func menuCopyOnly() { copyOnly() }
     @objc private func menuCopyRecognized() { copyRecognizedText() }

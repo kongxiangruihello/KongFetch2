@@ -64,6 +64,7 @@ final class HotKeyCenter {
         case search = 1
         case clipboard = 2
         case lookup = 3
+        case capture = 4
     }
 
     private struct Registration {

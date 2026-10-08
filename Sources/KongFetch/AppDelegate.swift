@@ -128,6 +128,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         HotKeyCenter.shared.register(preferences.searchShortcut, for: .search) { [weak self] in self?.searchPanel.toggle() }
         HotKeyCenter.shared.register(preferences.clipboardShortcut, for: .clipboard) { [weak self] in self?.clipboardPanel.toggle() }
         HotKeyCenter.shared.register(preferences.lookupShortcut, for: .lookup) { [weak self] in self?.lookUpSelection() }
+        HotKeyCenter.shared.register(preferences.captureShortcut, for: .capture) { [weak self] in self?.captureSelection() }
+    }
+
+    /// Sends the text selected in the frontmost app to KongReview's quick-capture window.
+    private func captureSelection() {
+        guard KongReviewLink.isInstalled else { NSSound.beep(); return }
+        let title = KongReviewLink.frontWindowTitle()
+        SelectedText.fetch(monitor: clipboardMonitor) { text in
+            guard let text, KongReviewLink.send(text: text, title: title) else { NSSound.beep(); return }
+        }
     }
 
     /// Looks up the text selected in the frontmost app in the search window's dictionary.
@@ -147,6 +157,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }.store(in: &subscriptions)
         preferences.$clipboardShortcut.dropFirst().sink { [weak self] shortcut in
             HotKeyCenter.shared.register(shortcut, for: .clipboard) { self?.clipboardPanel.toggle() }
+            self?.status.refresh()
+        }.store(in: &subscriptions)
+        preferences.$captureShortcut.dropFirst().sink { [weak self] shortcut in
+            HotKeyCenter.shared.register(shortcut, for: .capture) { self?.captureSelection() }
             self?.status.refresh()
         }.store(in: &subscriptions)
         preferences.$lookupShortcut.dropFirst().sink { [weak self] shortcut in
@@ -234,6 +248,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let clipboard = menu.addItem(withTitle: "剪贴板历史", action: #selector(showClipboard), keyEquivalent: "")
         clipboard.target = self
         if let shortcut = preferences.clipboardShortcut { clipboard.title += "    " + shortcut.display }
+        if KongReviewLink.isInstalled {
+            let capture = menu.addItem(withTitle: "摘录所选文字到 KongReview", action: #selector(captureSelectionAction), keyEquivalent: "")
+            capture.target = self
+            if let shortcut = preferences.captureShortcut { capture.title += "    " + shortcut.display }
+        }
         if preferences.clipboardEnabled {
             let pause = menu.addItem(withTitle: preferences.clipboardPaused ? "继续记录剪贴板" : "暂停记录剪贴板",
                                      action: #selector(toggleClipboardPause), keyEquivalent: "")
@@ -261,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showSearch() { searchPanel.show() }
     @objc private func showClipboard() { clipboardPanel.show() }
+    @objc private func captureSelectionAction() { captureSelection() }
 
     @objc private func toggleClipboardPause() {
         preferences.clipboardPaused.toggle()
@@ -329,6 +349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.searchHotKeyRegistered = HotKeyCenter.shared.isRegistered(.search)
         s.clipboardHotKeyRegistered = HotKeyCenter.shared.isRegistered(.clipboard)
         s.lookupHotKeyRegistered = HotKeyCenter.shared.isRegistered(.lookup)
+        s.captureHotKeyRegistered = HotKeyCenter.shared.isRegistered(.capture)
+        s.kongReviewInstalled = KongReviewLink.isInstalled
         s.loginItemEnabled = LoginItem.isEnabled
         s.loginItemNote = LoginItem.note
         s.signing = SigningInfo.describe()

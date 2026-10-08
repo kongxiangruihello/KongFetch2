@@ -17,6 +17,9 @@ final class QuickLinkTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(link.url(for: "a&b c")).absoluteString, "https://www.google.com/search?q=a%26b%20c")
         XCTAssertEqual(try XCTUnwrap(QuickLinks.defaults[2].url(for: "仁")).absoluteString, "https://www.zdic.net/hans/%E4%BB%81")
         XCTAssertNil(QuickLink(keyword: "x", name: "x", template: "file:///etc/{query}").url(for: "passwd"))
+        XCTAssertNil(QuickLink(keyword: "x", name: "x", template: "javascript:alert({query})").url(for: "1"))
+        XCTAssertEqual(try XCTUnwrap(QuickLink(keyword: "kr", name: "kr", template: "kongreview://add?text={query}").url(for: "学而 & 时习")).absoluteString,
+                       "kongreview://add?text=%E5%AD%A6%E8%80%8C%20%26%20%E6%97%B6%E4%B9%A0")
         XCTAssertNil(QuickLink(keyword: "x", name: "x", template: "not a url {query}").url(for: "q"))
     }
 
