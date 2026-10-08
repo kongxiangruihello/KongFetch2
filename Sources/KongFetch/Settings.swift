@@ -936,6 +936,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         status.stopUpdating()
         // Back to a menu-bar-only app, and give focus back to the previous app.
         DispatchQueue.main.async {
+            // The batch-rename window may still be open.
+            guard !NSApp.windows.contains(where: { $0.isVisible && !($0 is NSPanel) && $0.title == "批量重命名" }) else { return }
             NSApp.setActivationPolicy(.accessory)
             NSApp.hide(nil)
         }

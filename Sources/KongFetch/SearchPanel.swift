@@ -49,6 +49,8 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     var openSettings: (() -> Void)?
     /// Explains missing folder permissions when a search finds nothing.
     var accessHint: (() -> String?)?
+    /// Opens the batch-rename window with these files.
+    var batchRename: (([URL]) -> Void)?
     /// The user's web searches (Settings › 网页搜索).
     var quickLinks: () -> [QuickLink] = { QuickLinks.defaults }
 
@@ -466,6 +468,10 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
                 self?.statusLabel.stringValue = "已拷贝名称"
             }
             add(menu, "在终端中打开", "", []) { [weak self] in self?.openInTerminal(result) }
+            add(menu, "批量重命名…", "", []) { [weak self] in
+                self?.hide()
+                self?.batchRename?([result.url])
+            }
             menu.addItem(.separator())
             add(menu, "移到废纸篓", "", []) { [weak self] in self?.moveToTrash(result) }
         case .web:

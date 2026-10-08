@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var clipboardMonitor: ClipboardMonitor!
     private var clipboardHistory: ClipboardHistory!
     private var settingsWindow: SettingsWindowController?
+    private var renameWindow: BatchRenameWindowController?
     private var subscriptions = Set<AnyCancellable>()
     private var folderAccessCache: (checked: Date, state: [String: Bool], fullDisk: Bool)?
     private var pinyinIndex: PinyinIndexService!
@@ -53,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clipboardPanel = ClipboardPanelController(monitor: clipboardMonitor, preferences: preferences, library: snippets)
         searchPanel.openSettings = { [weak self] in self?.openSettings() }
         searchPanel.quickLinks = { [preferences] in preferences.quickLinks }
+        searchPanel.batchRename = { [weak self] urls in self?.showBatchRename(urls) }
         clipboardPanel.openSettings = { [weak self] in self?.openSettings() }
 
         buildStatusItem()
@@ -258,6 +260,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                      action: #selector(toggleClipboardPause), keyEquivalent: "")
             pause.target = self
         }
+        let rename = menu.addItem(withTitle: "批量重命名…", action: #selector(showBatchRenameAction), keyEquivalent: "")
+        rename.target = self
         menu.addItem(.separator())
         if preferences.doubleTapModifier != .off && !doubleTap.isListening {
             let warning = menu.addItem(withTitle: "⚠︎ 连按 \(preferences.doubleTapModifier.title) 未生效，点此查看", action: #selector(openSettingsAction), keyEquivalent: "")
@@ -281,6 +285,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showSearch() { searchPanel.show() }
     @objc private func showClipboard() { clipboardPanel.show() }
     @objc private func captureSelectionAction() { captureSelection() }
+    @objc private func showBatchRenameAction() { showBatchRename([]) }
+
+    private func showBatchRename(_ urls: [URL]) {
+        if renameWindow == nil { renameWindow = BatchRenameWindowController() }
+        renameWindow?.present(adding: urls)
+    }
 
     @objc private func toggleClipboardPause() {
         preferences.clipboardPaused.toggle()
