@@ -38,6 +38,8 @@ final class Preferences: ObservableObject {
     @Published var cleanupOperations: [TextCleanup.Operation] {
         didSet { defaults.set(cleanupOperations.map(\.rawValue), forKey: key("cleanupOperations")) }
     }
+    /// Expand snippet keywords typed in any app.
+    @Published var snippetExpansion: Bool { didSet { defaults.set(snippetExpansion, forKey: key("snippetExpansion")) } }
     /// Web searches reached by a keyword in the search window.
     @Published var quickLinks: [QuickLink] {
         didSet { if let data = try? JSONEncoder().encode(quickLinks) { defaults.set(data, forKey: key("quickLinks")) } }
@@ -80,6 +82,7 @@ final class Preferences: ObservableObject {
             .compactMap(TextCleanup.Operation.init(rawValue:)) ?? TextCleanup.defaultOperations
         quickLinks = defaults.data(forKey: "kf4.quickLinks").flatMap { try? JSONDecoder().decode([QuickLink].self, from: $0) }
             ?? QuickLinks.defaults
+        snippetExpansion = value("snippetExpansion", true)
         hasCompletedFirstLaunch = value("hasCompletedFirstLaunch", false)
         autoCheckUpdates = value("autoCheckUpdates", true)
         folderAccessRequested = value("folderAccessRequested", false)

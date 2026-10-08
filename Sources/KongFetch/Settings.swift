@@ -32,6 +32,10 @@ final class AppStatus: ObservableObject {
         var ocrProgress = OCRService.Progress()
         var ocrPaused = false
         var update = Updater.State()
+        var snippetListening = false
+        var snippetInputMethodActive = false
+        var snippetProblem: String?
+        var snippetLastExpansion: Date?
     }
 
     @Published private(set) var snapshot = Snapshot()
@@ -77,6 +81,7 @@ struct SettingsActions {
 struct SettingsView: View {
     @ObservedObject var preferences: Preferences
     @ObservedObject var status: AppStatus
+    let library: SnippetLibrary
     let actions: SettingsActions
 
     var body: some View {
@@ -87,6 +92,8 @@ struct SettingsView: View {
                 .tabItem { Label("搜索", systemImage: "magnifyingglass") }
             ClipboardSettings(preferences: preferences, status: status, actions: actions)
                 .tabItem { Label("剪贴板", systemImage: "doc.on.clipboard") }
+            SnippetSettings(preferences: preferences, status: status, library: library, actions: actions)
+                .tabItem { Label("片段", systemImage: "text.quote") }
             WebSearchSettings(preferences: preferences)
                 .tabItem { Label("网页搜索", systemImage: "globe") }
             UpdateSettings(preferences: preferences, status: status, actions: actions)
@@ -95,7 +102,7 @@ struct SettingsView: View {
                 .tabItem { Label("诊断", systemImage: "stethoscope") }
         }
         .padding(20)
-        .frame(width: 600, height: 500)
+        .frame(width: 660, height: 520)
     }
 }
 
@@ -460,6 +467,126 @@ private struct ClipboardSettings: View {
     }
 }
 
+private struct SnippetSettings: View {
+    @ObservedObject var preferences: Preferences
+    @ObservedObject var status: AppStatus
+    @ObservedObject var library: SnippetLibrary
+    let actions: SettingsActions
+    @State private var selection: UUID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("在任何应用中输入关键词，自动替换为片段", isOn: $preferences.snippetExpansion)
+            if preferences.snippetExpansion { expansionStatus }
+            HStack(alignment: .top, spacing: 12) {
+                VStack(spacing: 6) {
+                    List(selection: $selection) {
+                        ForEach(library.snippets) { snippet in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(snippet.name.isEmpty ? "（未命名）" : snippet.name).lineLimit(1)
+                                Text(snippet.keyword.isEmpty ? "无关键词" : snippet.keyword)
+                                    .font(.caption).foregroundColor(.secondary).lineLimit(1)
+                            }
+                            .tag(snippet.id)
+                        }
+                    }
+                    .frame(width: 180)
+                    HStack {
+                        Button {
+                            let new = TextSnippet(name: "新片段", keyword: "", content: "")
+                            library.upsert(new)
+                            selection = new.id
+                        } label: { Image(systemName: "plus") }
+                        Button {
+                            if let id = selection { library.remove(id); selection = nil }
+                        } label: { Image(systemName: "minus") }
+                        .disabled(selection == nil)
+                        Spacer()
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if let id = selection, library.snippet(id) != nil {
+                    editor(id)
+                } else {
+                    Text("选择左侧的片段进行编辑，或点 + 新建。\n剪贴板窗口里按 ⇥ 可以搜索并粘贴片段。")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            if !library.duplicateKeywords.isEmpty {
+                Text("关键词重复：\(library.duplicateKeywords.joined(separator: "、"))，只有其中一个会展开。")
+                    .font(.caption).foregroundColor(.orange)
+            }
+        }
+        .padding(8)
+    }
+
+    @ViewBuilder
+    private var expansionStatus: some View {
+        let s = status.snapshot
+        VStack(alignment: .leading, spacing: 4) {
+            if !s.inputMonitoringAllowed {
+                HStack {
+                    StatusBadge(ok: false, text: "需要“输入监控”权限")
+                    Button("授权…") { actions.requestInputMonitoring() }
+                }
+            } else if !s.accessibilityAllowed {
+                HStack {
+                    StatusBadge(ok: false, text: "需要“辅助功能”权限，才能删除关键词并粘贴")
+                    Button("授权…") { actions.requestAccessibility() }
+                }
+            } else if s.snippetListening {
+                StatusBadge(ok: true, text: "正在监听" + (s.snippetLastExpansion.map { " · 上次展开 \($0.shortDescription)" } ?? ""))
+            } else if library.snippets.allSatisfy({ !TextSnippet.isValidKeyword($0.keyword) }) {
+                Text("还没有带关键词的片段。").foregroundColor(.secondary)
+            } else {
+                StatusBadge(ok: false, text: "监听尚未启动，稍候会自动重试")
+            }
+            if let problem = s.snippetProblem { Text(problem).font(.caption).foregroundColor(.orange) }
+            Text(s.snippetInputMethodActive
+                 ? "当前是中文输入法，关键词不会展开。请切换到 ABC 键盘（如按 Caps Lock）后输入，或在剪贴板窗口按 ⇥ 选片段。"
+                 : "只在 ABC 等英文键盘下展开；使用中文输入法时请在剪贴板窗口按 ⇥ 选片段。密码管理器中不展开。")
+                .font(.caption).foregroundColor(s.snippetInputMethodActive ? .orange : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func binding(_ id: UUID, _ keyPath: WritableKeyPath<TextSnippet, String>) -> Binding<String> {
+        Binding(
+            get: { library.snippet(id)?[keyPath: keyPath] ?? "" },
+            set: { value in
+                guard var snippet = library.snippet(id) else { return }
+                snippet[keyPath: keyPath] = value
+                library.upsert(snippet)
+            }
+        )
+    }
+
+    private func editor(_ id: UUID) -> some View {
+        let keyword = library.snippet(id)?.keyword ?? ""
+        return VStack(alignment: .leading, spacing: 8) {
+            TextField("名称", text: binding(id, \.name))
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                TextField("关键词，如 ;qm（可不填）", text: binding(id, \.keyword))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+                if !keyword.isEmpty && !TextSnippet.isValidKeyword(keyword) {
+                    Text("至少两个字符，不含空格").font(.caption).foregroundColor(.orange)
+                }
+            }
+            TextEditor(text: binding(id, \.content))
+                .font(.system(size: 13))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
+            Text("可用占位符：" + SnippetTemplate.placeholders.map { "\($0.token) \($0.meaning)" }.joined(separator: "；"))
+                .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Text("关键词建议以 ; 或 // 开头，避免打字时误触发。")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+}
+
 private struct WebSearchSettings: View {
     @ObservedObject var preferences: Preferences
 
@@ -745,9 +872,9 @@ final class ShortcutRecorderButton: NSButton {
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let status: AppStatus
 
-    init(preferences: Preferences, status: AppStatus, actions: SettingsActions) {
+    init(preferences: Preferences, status: AppStatus, library: SnippetLibrary, actions: SettingsActions) {
         self.status = status
-        let host = NSHostingController(rootView: SettingsView(preferences: preferences, status: status, actions: actions))
+        let host = NSHostingController(rootView: SettingsView(preferences: preferences, status: status, library: library, actions: actions))
         let window = NSWindow(contentViewController: host)
         window.title = "KongFetch 设置"
         window.styleMask = [.titled, .closable, .miniaturizable]

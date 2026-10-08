@@ -162,6 +162,19 @@ final class ClipboardMonitor {
         return ok
     }
 
+    /// Puts back pasteboard contents saved earlier (see SnippetExpansionService.copyItems), without recording them.
+    func restoreItems(_ items: [[NSPasteboard.PasteboardType: Data]]) {
+        let entries = items.map { types -> NSPasteboardItem in
+            let entry = NSPasteboardItem()
+            for (type, data) in types { entry.setData(data, forType: type) }
+            return entry
+        }
+        entries.first?.setString("1", forType: Self.restoredMarker)
+        pasteboard.clearContents()
+        if !entries.isEmpty { pasteboard.writeObjects(entries) }
+        lastChangeCount = pasteboard.changeCount
+    }
+
     /// Puts an entry back on the pasteboard. Returns false if its data is gone.
     @discardableResult
     func restore(_ item: ClipItem, plainTextOnly: Bool = false) -> Bool {
@@ -220,14 +233,9 @@ enum Paster {
         }
     }
 
-    static func pasteIntoFrontmostApp() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let keyCode = CGKeyCode(kVK_ANSI_V)
-        let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
-        let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
-        down?.flags = .maskCommand
-        up?.flags = .maskCommand
-        down?.post(tap: .cgAnnotatedSessionEventTap)
-        up?.post(tap: .cgAnnotatedSessionEventTap)
+    /// Sends ⌘V, then ← `moveLeft` times (to put the cursor where a snippet's {cursor} was).
+    static func pasteIntoFrontmostApp(moveLeft: Int = 0) {
+        SnippetExpansionService.post(key: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
+        if moveLeft > 0 { SnippetExpansionService.post(key: CGKeyCode(kVK_LeftArrow), count: moveLeft) }
     }
 }

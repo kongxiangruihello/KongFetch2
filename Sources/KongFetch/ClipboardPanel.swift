@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import ImageIO
 import KongFetchCore
 
@@ -8,7 +9,15 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
     let panel = FloatingPanel(size: NSSize(width: 780, height: 480))
     private let monitor: ClipboardMonitor
     private let preferences: Preferences
+    private let library: SnippetLibrary
     private var history: ClipboardHistory { monitor.history }
+    private var libraryObserver: AnyCancellable?
+
+    /// Tab switches between the clipboard history and the snippets.
+    private enum Mode { case history, snippets }
+    private var mode = Mode.history
+    private let modeButton = NSButton(title: "历史", target: nil, action: nil)
+    private var snippetRows: [TextSnippet] = []
 
     private let field = makePanelSearchField(placeholder: "搜索剪贴板历史")
     private let table: NSTableView
@@ -32,9 +41,10 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
 
     var openSettings: (() -> Void)?
 
-    init(monitor: ClipboardMonitor, preferences: Preferences) {
+    init(monitor: ClipboardMonitor, preferences: Preferences, library: SnippetLibrary) {
         self.monitor = monitor
         self.preferences = preferences
+        self.library = library
         let pair = makeResultsTable(rowHeight: 44)
         table = pair.0
         scroll = pair.1
@@ -53,6 +63,9 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
             }
         }
         history.onChange = { [weak self] in self?.reloadIfVisible() }
+        libraryObserver = library.$snippets.dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.reloadIfVisible() }
+        }
     }
 
     func toggle() {
@@ -62,6 +75,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
     func show() {
         field.stringValue = ""
         previewCleaned = false
+        if mode != .history { toggleMode() }
         reload()
         panel.present()
         panel.makeFirstResponder(field)
@@ -85,6 +99,12 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         pauseButton.target = self
         pauseButton.action = #selector(togglePause)
         pauseButton.translatesAutoresizingMaskIntoConstraints = false
+        modeButton.bezelStyle = .inline
+        modeButton.controlSize = .small
+        modeButton.target = self
+        modeButton.action = #selector(toggleMode)
+        modeButton.toolTip = "在剪贴板历史和片段之间切换（Tab）"
+        modeButton.translatesAutoresizingMaskIntoConstraints = false
 
         textPreview.isEditable = false
         textPreview.isSelectable = true
@@ -105,7 +125,6 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         detailLabel.alignment = .center
 
         hintLabel.alignment = .right
-        hintLabel.stringValue = "↩ 粘贴   ⇧↩ 纯文本   ⌘J 整理后粘贴   ⌘E 预览整理   ⌘K 更多操作"
 
         buildOnboarding()
 
@@ -115,7 +134,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         divider.boxType = .separator
         divider.translatesAutoresizingMaskIntoConstraints = false
 
-        for view in [icon, field, pauseButton, topLine, scroll, divider, textScroll, imagePreview, detailLabel,
+        for view in [icon, field, modeButton, pauseButton, topLine, scroll, divider, textScroll, imagePreview, detailLabel,
                      bottomLine, statusLabel, hintLabel, onboarding] as [NSView] {
             content.addSubview(view)
         }
@@ -123,7 +142,9 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
             icon.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             icon.centerYAnchor.constraint(equalTo: field.centerYAnchor),
             field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
-            field.trailingAnchor.constraint(equalTo: pauseButton.leadingAnchor, constant: -10),
+            field.trailingAnchor.constraint(equalTo: modeButton.leadingAnchor, constant: -10),
+            modeButton.trailingAnchor.constraint(equalTo: pauseButton.leadingAnchor, constant: -8),
+            modeButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
             field.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
             field.heightAnchor.constraint(equalToConstant: 30),
             pauseButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
@@ -198,7 +219,12 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         if panel.isVisible { reload() }
     }
 
+    private static let historyHint = "↩ 粘贴   ⇧↩ 纯文本   ⌘J 整理后粘贴   ⌘E 预览整理   ⌘K 更多   ⇥ 片段"
+    private static let snippetHint = "↩ 粘贴片段   ⇥ 剪贴板历史   ⌘, 编辑片段"
+
     private func reload() {
+        if mode == .snippets { reloadSnippets(); return }
+        hintLabel.stringValue = Self.historyHint
         let enabled = preferences.clipboardEnabled
         onboarding.isHidden = enabled
         for view in [field, scroll, textScroll, imagePreview, detailLabel, pauseButton, hintLabel] as [NSView] {
@@ -234,10 +260,84 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
     }
 
     private var selectedItem: ClipItem? {
-        rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil
+        mode == .history && rows.indices.contains(table.selectedRow) ? rows[table.selectedRow] : nil
+    }
+
+    private var selectedSnippet: TextSnippet? {
+        mode == .snippets && snippetRows.indices.contains(table.selectedRow) ? snippetRows[table.selectedRow] : nil
+    }
+
+    // MARK: Snippets
+
+    private func reloadSnippets() {
+        onboarding.isHidden = true
+        for view in [field, scroll, textScroll, detailLabel, hintLabel] as [NSView] { view.isHidden = false }
+        pauseButton.isHidden = true
+        imagePreview.isHidden = true
+        hintLabel.stringValue = Self.snippetHint
+        let selectedID = selectedSnippet?.id
+        let typed = field.stringValue.trimmingCharacters(in: .whitespaces)
+        let needle = TextFolding.fold(typed)
+        snippetRows = library.snippets
+            .filter { needle.isEmpty || TextFolding.fold($0.searchText).contains(needle) }
+            .sorted { a, b in
+                // An exact keyword first, then the most recently used, then by name.
+                let ak = !typed.isEmpty && a.keyword == typed, bk = !typed.isEmpty && b.keyword == typed
+                if ak != bk { return ak }
+                let au = a.lastUsed ?? .distantPast, bu = b.lastUsed ?? .distantPast
+                if au != bu { return au > bu }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+        table.reloadData()
+        let index = selectedID.flatMap { id in snippetRows.firstIndex { $0.id == id } } ?? 0
+        if snippetRows.indices.contains(index) {
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            table.scrollRowToVisible(index)
+        }
+        updatePreview()
+        var status = "\(library.snippets.count) 个片段"
+        if !preferences.snippetExpansion {
+            status += " · 关键词自动展开已关闭"
+        }
+        statusLabel.stringValue = status + " · 在设置 › 片段 中添加和编辑"
+    }
+
+    private func updateSnippetPreview() {
+        imagePreview.isHidden = true
+        textScroll.isHidden = false
+        guard let snippet = selectedSnippet else {
+            textPreview.string = snippetRows.isEmpty
+                ? (library.snippets.isEmpty ? "还没有片段。按 ⌘, 在“设置 › 片段”中添加常用文字。" : "没有匹配的片段。")
+                : ""
+            detailLabel.stringValue = ""
+            return
+        }
+        textPreview.string = SnippetTemplate.render(snippet.content, clipboard: NSPasteboard.general.string(forType: .string)).text
+        textPreview.scrollToBeginningOfDocument(nil)
+        detailLabel.stringValue = [snippet.keyword.isEmpty ? "无关键词" : "关键词 \(snippet.keyword)",
+                                   snippet.lastUsed.map { "上次使用 " + $0.shortDescription }]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func pasteSnippet() {
+        guard let snippet = selectedSnippet else { return }
+        let rendered = SnippetTemplate.render(snippet.content, clipboard: NSPasteboard.general.string(forType: .string))
+        guard monitor.restoreText(rendered.text) else { return }
+        library.touch(snippet.id)
+        finishPaste(moveLeft: rendered.cursorOffsetFromEnd)
+    }
+
+    @objc private func toggleMode() {
+        mode = mode == .history ? .snippets : .history
+        modeButton.title = mode == .history ? "历史" : "片段"
+        field.placeholderString = mode == .history ? "搜索剪贴板历史" : "搜索片段（名称、关键词或内容）"
+        reload()
+        panel.makeFirstResponder(field)
+        field.currentEditor()?.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
     }
 
     private func updatePreview() {
+        if mode == .snippets { updateSnippetPreview(); return }
         guard let item = selectedItem else {
             textScroll.isHidden = !preferences.clipboardEnabled
             imagePreview.isHidden = true
@@ -314,8 +414,12 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         case #selector(NSResponder.moveDown(_:)): moveSelection(by: 1); return true
         case #selector(NSResponder.moveUp(_:)): moveSelection(by: -1); return true
         case #selector(NSResponder.insertNewline(_:)):
+            if mode == .snippets { pasteSnippet(); return true }
             paste(plainText: NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false); return true
-        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)): paste(plainText: true); return true
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+            if mode == .snippets { pasteSnippet(); return true }
+            paste(plainText: true); return true
+        case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)): toggleMode(); return true
         case #selector(NSResponder.cancelOperation(_:)):
             if field.stringValue.isEmpty { hide() } else { field.stringValue = ""; reload() }
             return true
@@ -329,8 +433,25 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         if (panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.numericPad, .function, .capsLock])
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
-        if flags == .shift, event.keyCode == 36 { paste(plainText: true); return true }
+        // Tab also works when the search field is hidden (history not enabled yet).
+        if flags.isEmpty, event.keyCode == 48, field.isHidden || panel.firstResponder !== field.currentEditor() {
+            toggleMode(); return true
+        }
+        if flags == .shift, event.keyCode == 36 { mode == .snippets ? pasteSnippet() : paste(plainText: true); return true }
         guard flags == .command else { return false }
+        if mode == .snippets {
+            switch key {
+            case ",": hide(); openSettings?(); return true
+            case "w": hide(); return true
+            default:
+                if let digit = Int(key), (1...9).contains(digit), snippetRows.indices.contains(digit - 1) {
+                    table.selectRowIndexes(IndexSet(integer: digit - 1), byExtendingSelection: false)
+                    pasteSnippet()
+                    return true
+                }
+                return false
+            }
+        }
         switch event.keyCode {
         case 36: copyOnly(); return true                      // ⌘↩
         case 51 where field.stringValue.isEmpty: deleteSelected(); return true   // ⌘⌫
@@ -364,7 +485,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
     // MARK: Actions
 
     @objc private func pasteSelectedAction() {
-        paste(plainText: false)
+        mode == .snippets ? pasteSnippet() : paste(plainText: false)
     }
 
     private func paste(plainText: Bool) {
@@ -378,12 +499,12 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
     }
 
     /// Hides the window and, if allowed, pastes into the app that was in front.
-    private func finishPaste() {
+    private func finishPaste(moveLeft: Int = 0) {
         hide()
         guard preferences.autoPaste else { return }
         if Paster.isTrusted {
             // Wait for the previous app's window to take keyboard focus back.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { Paster.pasteIntoFrontmostApp() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { Paster.pasteIntoFrontmostApp(moveLeft: moveLeft) }
         }
     }
 
@@ -550,7 +671,7 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
 
     // MARK: Table
 
-    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { mode == .snippets ? snippetRows.count : rows.count }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { SoftSelectionRowView() }
 
@@ -561,6 +682,15 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
             view.identifier = id
             return view
         }()
+        if mode == .snippets {
+            let snippet = snippetRows[row]
+            cell.icon.image = NSImage(systemSymbolName: "text.quote", accessibilityDescription: "片段")
+            cell.title.stringValue = snippet.name.isEmpty ? "（未命名）" : snippet.name
+            let firstLine = snippet.content.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+            cell.subtitle.stringValue = [snippet.keyword.isEmpty ? nil : snippet.keyword, firstLine].compactMap { $0 }.joined(separator: " · ")
+            cell.badge.stringValue = row < 9 ? "⌘\(row + 1)" : ""
+            return cell
+        }
         let item = rows[row]
         cell.icon.image = icon(for: item)
         cell.title.stringValue = item.title.isEmpty ? "（空白）" : item.title

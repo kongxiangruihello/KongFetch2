@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pinyinIndex: PinyinIndexService!
     private var ocr: OCRService!
     private var updater: Updater!
+    private var snippets: SnippetLibrary!
+    private var snippetExpansion: SnippetExpansionService!
 
     static var supportDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -46,7 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ocr.onChange = { [weak self] in self?.status.refresh() }
         searchPanel = SearchPanelController(coordinator: FileSearchCoordinator(recents: recents, preferences: preferences,
                                                                                pinyinIndex: pinyinIndex.index, ocrStore: ocr.store))
-        clipboardPanel = ClipboardPanelController(monitor: clipboardMonitor, preferences: preferences)
+        snippets = SnippetLibrary(fileURL: support.appendingPathComponent("snippets.json"))
+        snippetExpansion = SnippetExpansionService(library: snippets, monitor: clipboardMonitor)
+        clipboardPanel = ClipboardPanelController(monitor: clipboardMonitor, preferences: preferences, library: snippets)
         searchPanel.openSettings = { [weak self] in self?.openSettings() }
         searchPanel.quickLinks = { [preferences] in preferences.quickLinks }
         clipboardPanel.openSettings = { [weak self] in self?.openSettings() }
@@ -59,6 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clipboardMonitor.start()
         status.provider = { [weak self] in self?.makeSnapshot() ?? AppStatus.Snapshot() }
         observePreferences()
+        snippetExpansion.enabled = preferences.snippetExpansion
+        snippetExpansion.reloadSnippets()
         ocr.configure(ocrSettings)
         offerToQuitLegacyVersion()
 
@@ -156,6 +162,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         preferences.$clipboardEnabled.dropFirst().sink { [weak self] enabled in
             if enabled { self?.clipboardMonitor.skipCurrentContents() }
         }.store(in: &subscriptions)
+        preferences.$snippetExpansion.dropFirst().sink { [weak self] enabled in
+            self?.snippetExpansion.enabled = enabled
+            self?.status.refresh()
+        }.store(in: &subscriptions)
+        snippets.$snippets.dropFirst()
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.snippetExpansion.reloadSnippets() }
+            .store(in: &subscriptions)
     }
 
     private func installMainMenu() {
@@ -246,7 +260,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func openSettings() {
         if settingsWindow == nil {
             let actions = SettingsActions(
-                requestInputMonitoring: { [weak self] in self?.doubleTap.requestPermission() },
+                requestInputMonitoring: { [weak self] in
+                    self?.doubleTap.requestPermission()
+                    self?.snippetExpansion.refresh()
+                },
                 requestAccessibility: { Paster.requestTrust(); Paster.openAccessibilitySettings() },
                 setLoginItem: { [weak self] enabled in
                     do { try LoginItem.set(enabled) } catch {
@@ -270,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     NSWorkspace.shared.open(url)
                 }
             )
-            settingsWindow = SettingsWindowController(preferences: preferences, status: status, actions: actions)
+            settingsWindow = SettingsWindowController(preferences: preferences, status: status, library: snippets, actions: actions)
         }
         settingsWindow?.present()
     }
@@ -303,6 +320,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.ocrProgress = ocr.progress
         s.ocrPaused = ocr.paused
         s.update = updater.state
+        s.snippetListening = snippetExpansion.isListening
+        s.snippetInputMethodActive = snippetExpansion.inputMethodActive
+        s.snippetProblem = snippetExpansion.lastProblem
+        s.snippetLastExpansion = snippetExpansion.lastExpansion
         return s
     }
 
