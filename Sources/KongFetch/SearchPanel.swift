@@ -17,6 +17,9 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     private let hintLabel = makeFooterLabel()
     private let spinner = NSProgressIndicator()
     private let modeButton = NSButton(title: "名称", target: nil, action: nil)
+    private let magnifier = NSImageView(image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil) ?? NSImage())
+    /// Shown instead of the magnifier while a folder is open in the window: back to the parent folder.
+    private let backButton = NSButton()
     /// Search inside files instead of names only. Toggled with Tab.
     private var contentMode = false
 
@@ -125,6 +128,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
             // Next time the window opens with a fresh search.
             browseStack = []
             folderItems = []
+            updateBrowseChrome()
             field.stringValue = ""
             hintLabel.stringValue = Self.searchHint
             field.placeholderString = contentMode ? "搜索文件内容（PDF、Word、Pages、文本……）" : "搜索文件、文件夹和应用"
@@ -153,10 +157,19 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func buildLayout() {
         let content = panel.effectView
-        let magnifier = NSImageView(image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil) ?? NSImage())
         magnifier.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
         magnifier.contentTintColor = .secondaryLabelColor
         magnifier.translatesAutoresizingMaskIntoConstraints = false
+
+        backButton.image = NSImage(systemSymbolName: "chevron.backward.circle.fill", accessibilityDescription: "返回上一级")
+        backButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 20, weight: .regular)
+        backButton.contentTintColor = .controlAccentColor
+        backButton.isBordered = false
+        backButton.imagePosition = .imageOnly
+        backButton.target = self
+        backButton.action = #selector(backButtonClicked)
+        backButton.isHidden = true
+        backButton.translatesAutoresizingMaskIntoConstraints = false
 
         spinner.style = .spinning
         spinner.controlSize = .small
@@ -179,12 +192,17 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         modeButton.toolTip = "切换按名称或按内容搜索（Tab）"
         modeButton.translatesAutoresizingMaskIntoConstraints = false
 
-        for view in [magnifier, field, modeButton, spinner, topLine, scroll, divider, preview, bottomLine, statusLabel, hintLabel] as [NSView] {
+        for view in [magnifier, backButton, field, modeButton, spinner, topLine, scroll, divider, preview, bottomLine, statusLabel, hintLabel] as [NSView] {
             content.addSubview(view)
         }
         NSLayoutConstraint.activate([
             magnifier.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
             magnifier.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            magnifier.widthAnchor.constraint(equalToConstant: 24),
+            backButton.centerXAnchor.constraint(equalTo: magnifier.centerXAnchor),
+            backButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            backButton.widthAnchor.constraint(equalToConstant: 28),
+            backButton.heightAnchor.constraint(equalToConstant: 28),
             field.leadingAnchor.constraint(equalTo: magnifier.trailingAnchor, constant: 10),
             field.trailingAnchor.constraint(equalTo: modeButton.leadingAnchor, constant: -8),
             modeButton.trailingAnchor.constraint(equalTo: spinner.leadingAnchor, constant: -8),
@@ -512,6 +530,24 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         return values?.isDirectory == true && values?.isPackage != true
     }
 
+    /// Back arrow instead of the magnifier while a folder is open; its tooltip names where it goes.
+    private func updateBrowseChrome() {
+        let browsing = browsingFolder != nil
+        backButton.isHidden = !browsing
+        magnifier.isHidden = browsing
+        modeButton.isHidden = browsing
+        if let folder = browsingFolder {
+            let target = browseStack.count > 1 ? browseStack[browseStack.count - 2].folder : folder.deletingLastPathComponent()
+            backButton.toolTip = "返回“\(FileManager.default.displayName(atPath: target.path))”（← 或 ⌘↑）"
+        }
+    }
+
+    @objc private func backButtonClicked() {
+        goUp()
+        panel.makeFirstResponder(field)
+        field.currentEditor()?.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
+    }
+
     private func enterFolder(_ url: URL) {
         pendingSearch?.cancel()
         coordinator.cancel()
@@ -544,6 +580,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         let text = browseStack.first?.previousText ?? ""
         browseStack = []
         folderItems = []
+        updateBrowseChrome()
         hintLabel.stringValue = Self.searchHint
         field.placeholderString = contentMode ? "搜索文件内容（PDF、Word、Pages、文本……）" : "搜索文件、文件夹和应用"
         field.stringValue = text
@@ -568,6 +605,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
             a.1 != b.1 ? a.1 : a.0.displayName.localizedStandardCompare(b.0.displayName) == .orderedAscending
         }.map(\.0)
         hintLabel.stringValue = Self.browseHint
+        updateBrowseChrome()
         field.placeholderString = "在“\(FileManager.default.displayName(atPath: url.path))”中筛选"
         field.currentEditor()?.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
         showFolderItems(select: select)
