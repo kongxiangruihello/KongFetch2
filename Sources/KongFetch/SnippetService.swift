@@ -23,6 +23,11 @@ final class SnippetLibrary: ObservableObject {
         snippets = store.snippets
     }
 
+    func replaceAll(_ new: [TextSnippet]) {
+        store.replaceAll(new)
+        snippets = store.snippets
+    }
+
     func touch(_ id: UUID) {
         store.touch(id)
         snippets = store.snippets

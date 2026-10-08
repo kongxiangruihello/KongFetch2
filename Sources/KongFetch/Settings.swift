@@ -77,6 +77,9 @@ struct SettingsActions {
     var installUpdate: () -> Void
     var rollbackUpdate: () -> Void
     var showUpdateLog: () -> Void
+    var exportSettings: () -> Void
+    var importSettings: () -> Void
+    var exportDiagnostics: () -> Void
 }
 
 struct SettingsView: View {
@@ -163,6 +166,14 @@ private struct GeneralSettings: View {
                 if !status.snapshot.loginItemNote.isEmpty {
                     Text(status.snapshot.loginItemNote).font(.caption).foregroundColor(.secondary)
                 }
+            }
+            Section("备份与迁移") {
+                HStack {
+                    Button("导出设置…") { actions.exportSettings() }
+                    Button("导入设置…") { actions.importSettings() }
+                }
+                Text("导出的文件包含全部设置、网页搜索和片段，不含剪贴板历史。在另一台 Mac 上导入后，KongFetch 会重新打开；文件夹权限需在新 Mac 上重新授予。")
+                    .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
@@ -751,11 +762,12 @@ private struct DiagnosticsView: View {
                 row("版本", s.version, true)
             }
             Text(s.bundlePath).font(.caption).foregroundColor(.secondary).textSelection(.enabled)
-            Text("第 1 项已允许但第 2 项未启动：在“系统设置 › 隐私与安全性 › 输入监控”中删除 KongFetch 后重新添加。签名为 ad hoc 时，每次更新都需要这样重新授权。")
+            Text("第 1 项已允许但第 2 项未启动：在“系统设置 › 隐私与安全性 › 输入监控”中删除 KongFetch 后重新添加。签名为 ad hoc 时，每次更新都需要这样重新授权。遇到问题可“导出诊断包”发给开发者：包含状态报告、更新与编译日志、崩溃报告和设置，不含剪贴板内容和片段正文。")
                 .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button("授权输入监控…") { actions.requestInputMonitoring() }
                 Button("拷贝诊断信息") { copyReport(s) }
+                Button("导出诊断包…") { actions.exportDiagnostics() }
             }
             Spacer()
         }

@@ -299,6 +299,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 showUpdateLog: { [weak self] in
                     guard let url = self?.updater.logURL, FileManager.default.fileExists(atPath: url.path) else { return }
                     NSWorkspace.shared.open(url)
+                },
+                exportSettings: { [weak self] in
+                    guard let self else { return }
+                    SettingsTransfer.exportSettings(library: self.snippets)
+                },
+                importSettings: { [weak self] in
+                    guard let self else { return }
+                    SettingsTransfer.importSettings(library: self.snippets)
+                },
+                exportDiagnostics: { [weak self] in
+                    guard let self else { return }
+                    DiagnosticsBundle.export(report: self.diagnosticReport(), updateLog: self.updater.logURL,
+                                             sourceRoot: self.updater.state.sourceRoot)
                 }
             )
             settingsWindow = SettingsWindowController(preferences: preferences, status: status, library: snippets, actions: actions)
@@ -340,6 +353,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.snippetProblem = snippetExpansion.lastProblem
         s.snippetLastExpansion = snippetExpansion.lastExpansion
         return s
+    }
+
+    /// Plain-text status for the diagnostics zip.
+    private func diagnosticReport() -> String {
+        let s = makeSnapshot()
+        func yes(_ value: Bool) -> String { value ? "是" : "否" }
+        func time(_ date: Date?) -> String { date.map { ISO8601DateFormatter().string(from: $0) } ?? "-" }
+        var model = [CChar](repeating: 0, count: 256)
+        var size = model.count
+        sysctlbyname("hw.model", &model, &size, nil, 0)
+        let lines: [String] = [
+            "KongFetch \(s.version)",
+            "生成时间：\(time(Date()))",
+            "macOS \(ProcessInfo.processInfo.operatingSystemVersionString) · \(String(cString: model))",
+            "位置：\(s.bundlePath)",
+            "签名：\(s.signing)",
+            "",
+            "[权限]",
+            "输入监控：\(yes(s.inputMonitoringAllowed))  辅助功能：\(yes(s.accessibilityAllowed))  完全磁盘访问：\(yes(s.fullDiskAccess))",
+            "文件夹：" + s.folderAccess.sorted { $0.key < $1.key }.map { "\($0.key)=\(yes($0.value))" }.joined(separator: " "),
+            "",
+            "[快捷键]",
+            "搜索 \(preferences.searchShortcut?.display ?? "-") 已注册：\(yes(s.searchHotKeyRegistered))",
+            "剪贴板 \(preferences.clipboardShortcut?.display ?? "-") 已注册：\(yes(s.clipboardHotKeyRegistered))",
+            "查词 \(preferences.lookupShortcut?.display ?? "-") 已注册：\(yes(s.lookupHotKeyRegistered))",
+            "连按 \(preferences.doubleTapModifier.rawValue)：监听 \(yes(s.doubleTapListening))，最近按键 \(time(s.lastKeyboardEvent))，最近连按 \(time(s.lastDoubleTap))",
+            "",
+            "[片段]",
+            "数量 \(snippets.snippets.count)，自动展开 \(yes(preferences.snippetExpansion))，监听 \(yes(s.snippetListening))，输入法 \(yes(s.snippetInputMethodActive))，上次展开 \(time(s.snippetLastExpansion))，问题：\(s.snippetProblem ?? "-")",
+            "",
+            "[剪贴板]",
+            "启用 \(yes(preferences.clipboardEnabled))，暂停 \(yes(preferences.clipboardPaused))，\(s.clipboardCount) 条，\(s.clipboardBytes) 字节",
+            "",
+            "[拼音索引]",
+            "\(s.pinyinIndexCount) 个名称，扫描中 \(yes(s.pinyinIndexScanning))，更新于 \(time(s.pinyinIndexUpdated))",
+            "范围：" + s.pinyinIndexRoots.joined(separator: "、"),
+            "",
+            "[OCR]",
+            "已识别 \(s.ocrRecognized)，待识别 \(s.ocrProgress.pending)，暂停 \(yes(s.ocrPaused))，上次检查 \(time(s.ocrProgress.lastCheck))，上次错误：\(s.ocrProgress.lastError ?? "-")",
+            "",
+            "[更新]",
+            "源码：\(s.update.sourceRoot ?? "-")，上次检查 \(time(s.update.lastCheck))，待更新 \(s.update.pending.count) 项，备份：" + s.update.backups.joined(separator: "、")
+        ]
+        return lines.joined(separator: "\n") + "\n"
     }
 
     // MARK: Updates
