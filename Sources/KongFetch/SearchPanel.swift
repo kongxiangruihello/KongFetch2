@@ -46,6 +46,18 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     /// True while the ⌘K menu is open, so losing focus to it does not close the window.
     private var menuOpen = false
 
+    /// Folder browsing inside the window: ↩ on a folder lists its contents here instead of opening Finder.
+    private struct BrowseLevel {
+        var folder: URL
+        /// What was in the search field before entering this folder, restored on the way back.
+        var previousText: String
+    }
+    private var browseStack: [BrowseLevel] = []
+    private var folderItems: [SearchResult] = []
+    private var browsingFolder: URL? { browseStack.last?.folder }
+    private static let searchHint = "⇥ 名称/全文   ↩ 打开（文件夹在此展开）   ⌘↩ 在访达中显示   ⌘Y 快速查看   ⌘K 更多操作"
+    private static let browseHint = "↩ 打开/进入   ← 上一级   ⎋ 回到搜索   ⌘↩ 在访达中显示   ⌘Y 快速查看   ⌘K 更多"
+
     /// Set by the app delegate to open Settings.
     var openSettings: (() -> Void)?
     /// Explains missing folder permissions when a search finds nothing.
@@ -85,7 +97,10 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     func show() {
         panel.present()
         panel.makeFirstResponder(field)
-        if field.stringValue.isEmpty {
+        if browsingFolder != nil {
+            // Back where the user left off, inside the folder.
+            field.currentEditor()?.selectAll(nil)
+        } else if field.stringValue.isEmpty {
             // A fresh search starts by name; full-text stays on only while a query is being refined.
             if contentMode { toggleMode() }
             showRecents()
@@ -106,6 +121,14 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     func hide() {
         pendingSearch?.cancel()
         coordinator.cancel()
+        if browsingFolder != nil {
+            // Next time the window opens with a fresh search.
+            browseStack = []
+            folderItems = []
+            field.stringValue = ""
+            hintLabel.stringValue = Self.searchHint
+            field.placeholderString = contentMode ? "搜索文件内容（PDF、Word、Pages、文本……）" : "搜索文件、文件夹和应用"
+        }
         spinner.stopAnimation(nil)
         if QLPreviewPanel.sharedPreviewPanelExists(), let ql = QLPreviewPanel.shared(), ql.isVisible {
             ql.orderOut(nil)
@@ -147,7 +170,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         divider.translatesAutoresizingMaskIntoConstraints = false
         preview.translatesAutoresizingMaskIntoConstraints = false
         hintLabel.alignment = .right
-        hintLabel.stringValue = "⇥ 名称/全文   ↩ 打开   ⌘↩ 在访达中显示   ⌘Y 快速查看   ⌘K 更多操作   cd 查词"
+        hintLabel.stringValue = Self.searchHint
 
         modeButton.bezelStyle = .inline
         modeButton.controlSize = .small
@@ -207,6 +230,11 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
 
     func controlTextDidChange(_ obj: Notification) {
         pendingSearch?.cancel()
+        if browsingFolder != nil {
+            userChoseRow = false
+            showFolderItems()
+            return
+        }
         let text = field.stringValue
         let work = DispatchWorkItem { [weak self] in self?.runSearch(text) }
         pendingSearch = work
@@ -309,9 +337,27 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         case #selector(NSResponder.pageDown(_:)), #selector(NSResponder.scrollPageDown(_:)): moveSelection(by: 8); return true
         case #selector(NSResponder.pageUp(_:)), #selector(NSResponder.scrollPageUp(_:)): moveSelection(by: -8); return true
         case #selector(NSResponder.insertNewline(_:)): openSelected(); return true
-        case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)): toggleMode(); return true
+        case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)):
+            if browsingFolder == nil { toggleMode() }
+            return true
+        case #selector(NSResponder.moveRight(_:)):
+            // → at the end of the text enters the selected folder.
+            let atEnd = textView.selectedRange().location >= (field.stringValue as NSString).length
+            if atEnd, let result = selectedResult, Self.isBrowsableFolder(result) { enterFolder(result.url); return true }
+            return false
+        case #selector(NSResponder.moveLeft(_:)), #selector(NSResponder.deleteBackward(_:)):
+            // ← or ⌫ with nothing typed goes up one folder.
+            if browsingFolder != nil, field.stringValue.isEmpty { goUp(); return true }
+            return false
         case #selector(NSResponder.cancelOperation(_:)):
-            if field.stringValue.isEmpty { hide() } else { field.stringValue = ""; runSearch("") }
+            if !field.stringValue.isEmpty {
+                field.stringValue = ""
+                if browsingFolder != nil { showFolderItems() } else { runSearch("") }
+            } else if browsingFolder != nil {
+                leaveBrowsing()
+            } else {
+                hide()
+            }
             return true
         default:
             return false
@@ -335,6 +381,10 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
                 copySelected(); return true
             case "k":
                 showActionMenu(); return true
+            case "o":
+                // ⌘O opens the selection with its app — for a folder, in Finder.
+                if let result = selectedResult { open(result) }
+                return true
             default:
                 if let digit = Int(key), (1...9).contains(digit), rows.indices.contains(digit - 1) {
                     activate(rows[digit - 1]); return true
@@ -342,6 +392,10 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
             }
         }
         if flags == [.command, .option], key == "c" { copySelectedPath(); return true }
+        if flags == .command, event.keyCode == 126, browsingFolder != nil { goUp(); return true }      // ⌘↑
+        if flags == .command, event.keyCode == 125, let result = selectedResult, Self.isBrowsableFolder(result) {
+            enterFolder(result.url); return true                                                        // ⌘↓
+        }
         if flags == .command, event.keyCode == 36 { revealSelected(); return true } // ⌘↩
         return false
     }
@@ -365,6 +419,8 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func activate(_ row: Row) {
         switch row {
+        case .file(let result) where Self.isBrowsableFolder(result):
+            enterFolder(result.url)
         case .file(let result):
             open(result)
         case .definition(let word, _):
@@ -447,6 +503,108 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         statusLabel.stringValue = "已拷贝路径"
     }
 
+    // MARK: Folder browsing
+
+    /// A real folder (not an app or other package, not a file inside an archive).
+    static func isBrowsableFolder(_ result: SearchResult) -> Bool {
+        guard result.innerPath == nil, !result.isApplication else { return false }
+        let values = try? result.url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+        return values?.isDirectory == true && values?.isPackage != true
+    }
+
+    private func enterFolder(_ url: URL) {
+        pendingSearch?.cancel()
+        coordinator.cancel()
+        spinner.stopAnimation(nil)
+        if QLPreviewPanel.sharedPreviewPanelExists(), let ql = QLPreviewPanel.shared(), ql.isVisible { ql.orderOut(nil) }
+        coordinator.recents.record(url.path)
+        browseStack.append(BrowseLevel(folder: url, previousText: field.stringValue))
+        field.stringValue = ""
+        loadFolder(url)
+    }
+
+    /// ← / ⌫ / ⌘↑: back to the folder we came from, or on to the parent folder.
+    private func goUp() {
+        guard let current = browseStack.last else { return }
+        if browseStack.count > 1 {
+            browseStack.removeLast()
+            field.stringValue = current.previousText
+            loadFolder(browseStack[browseStack.count - 1].folder, select: current.folder)
+        } else {
+            let parent = current.folder.deletingLastPathComponent()
+            guard parent.path != current.folder.path else { return }
+            browseStack[0] = BrowseLevel(folder: parent, previousText: current.previousText)
+            field.stringValue = ""
+            loadFolder(parent, select: current.folder)
+        }
+    }
+
+    /// ⎋ with nothing typed: back to the search results that led here.
+    private func leaveBrowsing() {
+        let text = browseStack.first?.previousText ?? ""
+        browseStack = []
+        folderItems = []
+        hintLabel.stringValue = Self.searchHint
+        field.placeholderString = contentMode ? "搜索文件内容（PDF、Word、Pages、文本……）" : "搜索文件、文件夹和应用"
+        field.stringValue = text
+        field.currentEditor()?.selectedRange = NSRange(location: (text as NSString).length, length: 0)
+        runSearch(text)
+    }
+
+    private func loadFolder(_ url: URL, select: URL? = nil) {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey, .contentModificationDateKey, .fileSizeKey, .contentTypeKey, .localizedNameKey]
+        let contents = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys,
+                                                                       options: [.skipsHiddenFiles])) ?? []
+        let entries = contents.prefix(5000).map { item -> (SearchResult, Bool) in
+            let values = try? item.resourceValues(forKeys: Set(keys))
+            let isFolder = values?.isDirectory == true && values?.isPackage != true
+            let name = item.lastPathComponent
+            let display = values?.localizedName.map { item.pathExtension == "app" ? ($0 as NSString).deletingPathExtension : $0 } ?? name
+            return (SearchResult(url: item, displayName: display, fileName: name, contentType: values?.contentType?.identifier,
+                                 modified: values?.contentModificationDate, size: values?.fileSize, score: 0), isFolder)
+        }
+        // Folders first, then by name as Finder sorts them.
+        folderItems = entries.sorted { a, b in
+            a.1 != b.1 ? a.1 : a.0.displayName.localizedStandardCompare(b.0.displayName) == .orderedAscending
+        }.map(\.0)
+        hintLabel.stringValue = Self.browseHint
+        field.placeholderString = "在“\(FileManager.default.displayName(atPath: url.path))”中筛选"
+        field.currentEditor()?.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
+        showFolderItems(select: select)
+    }
+
+    /// The folder's contents, filtered by what is typed (name, or pinyin initials/full pinyin for Chinese names).
+    private func showFolderItems(select: URL? = nil) {
+        guard let folder = browsingFolder else { return }
+        showingRecents = false
+        webRows = []
+        let text = field.stringValue.trimmingCharacters(in: .whitespaces)
+        var shown = folderItems
+        if !text.isEmpty {
+            let needles = text.split(separator: " ").map(String.init)
+            let pinyinWord = needles.count == 1 && text.allSatisfy({ $0.isASCII && $0.isLetter }) ? text.lowercased() : nil
+            let scored = folderItems.compactMap { item -> (SearchResult, Int)? in
+                if let score = Ranker.nameScore(name: item.displayName, needles: needles) { return (item, score) }
+                if let word = pinyinWord, let forms = Pinyin.forms(for: Ranker.displayStem(item.displayName)),
+                   let score = Ranker.pinyinScore(forms: forms, query: word) { return (item, score) }
+                return nil
+            }
+            shown = scored.sorted { $0.1 > $1.1 }.map(\.0)
+        }
+        rows = shown.map(Row.file)
+        table.reloadData()
+        let index = select.flatMap { target in shown.firstIndex { $0.url.standardizedFileURL == target.standardizedFileURL } } ?? 0
+        if rows.indices.contains(index) {
+            table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            table.scrollRowToVisible(index)
+        }
+        updatePreview()
+        let where_ = PathDisplay.pretty(folder.path, home: NSHomeDirectory())
+        statusLabel.stringValue = folderItems.isEmpty
+            ? "\(where_) · 空文件夹"
+            : "\(where_) · " + (text.isEmpty ? "\(folderItems.count) 项" : "\(shown.count)/\(folderItems.count) 项")
+    }
+
     // MARK: Action menu (⌘K)
 
     private func showActionMenu() {
@@ -462,6 +620,19 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
                 NSPasteboard.general.setString(result.innerPath ?? "", forType: .string)
                 self?.statusLabel.stringValue = "已拷贝包内路径"
             }
+        case .file(let result) where Self.isBrowsableFolder(result):
+            add(menu, "在此展开", "\r", []) { [weak self] in self?.enterFolder(result.url) }
+            add(menu, "在访达中打开", "o", [.command]) { [weak self] in self?.open(result) }
+            add(menu, "在访达中显示", "\r", [.command]) { [weak self] in self?.revealSelected() }
+            menu.addItem(.separator())
+            add(menu, "拷贝路径", "c", [.command, .option]) { [weak self] in self?.copySelectedPath() }
+            add(menu, "在终端中打开", "", []) { [weak self] in self?.openInTerminal(result) }
+            add(menu, "批量重命名…", "", []) { [weak self] in
+                self?.hide()
+                self?.batchRename?([result.url])
+            }
+            menu.addItem(.separator())
+            add(menu, "移到废纸篓", "", []) { [weak self] in self?.moveToTrash(result) }
         case .file(let result):
             add(menu, "打开", "\r", []) { [weak self] in self?.open(result) }
             let openWith = NSMenuItem(title: "打开方式", action: nil, keyEquivalent: "")
@@ -557,6 +728,7 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
                 }
                 let index = self.table.selectedRow
                 self.rows.removeAll { $0.file?.path == result.path }
+                self.folderItems.removeAll { $0.path == result.path }
                 self.table.reloadData()
                 if !self.rows.isEmpty {
                     self.table.selectRowIndexes(IndexSet(integer: min(max(0, index), self.rows.count - 1)), byExtendingSelection: false)
