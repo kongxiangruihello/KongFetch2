@@ -35,6 +35,10 @@ final class AppStatus: ObservableObject {
         var ocrProgress = OCRService.Progress()
         var ocrPaused = false
         var update = Updater.State()
+        var archiveCount = 0
+        var archiveEntryCount = 0
+        var archiveScanning = false
+        var archiveLastScan: Date?
         var snippetListening = false
         var snippetInputMethodActive = false
         var snippetProblem: String?
@@ -72,6 +76,7 @@ struct SettingsActions {
     var revealDataFolder: () -> Void
     var requestFolderAccess: () -> Void
     var rebuildPinyinIndex: () -> Void
+    var scanArchives: () -> Void
     var ocrCheckNow: () -> Void
     var ocrSetPaused: (Bool) -> Void
     var ocrClear: () -> Void
@@ -255,6 +260,25 @@ private struct SearchSettings: View {
                     }
                     Button("添加其他文件夹…") { addIndexFolders() }
                     Text("只记录含中文的文件名，保存在本机；文件增删改名后自动更新。文稿、桌面、下载和 iCloud 云盘需先在上方授权。")
+                        .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Section("压缩包") {
+                Toggle("搜索 zip 压缩包里的文件名", isOn: $preferences.archiveSearchEnabled)
+                if preferences.archiveSearchEnabled {
+                    HStack {
+                        if status.snapshot.archiveScanning {
+                            ProgressView().controlSize(.small)
+                            Text("正在扫描… 已收录 \(status.snapshot.archiveCount) 个压缩包").foregroundColor(.secondary)
+                        } else {
+                            Text("已收录 \(status.snapshot.archiveCount) 个压缩包、\(status.snapshot.archiveEntryCount) 个文件" +
+                                 (status.snapshot.archiveLastScan.map { " · 扫描于 \($0.shortDescription)" } ?? ""))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Button("立即扫描") { actions.scanArchives() }
+                    }
+                    Text("范围与拼音索引相同（文稿、桌面、下载、iCloud 云盘及添加的文件夹），每 2 小时更新。只读压缩包目录，不解压；↩ 会把选中的那个文件取出到临时文件夹再打开。暂不支持 rar、7z 和加密的 zip。")
                         .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }

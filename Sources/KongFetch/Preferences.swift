@@ -42,6 +42,8 @@ final class Preferences: ObservableObject {
     @Published var cleanupOperations: [TextCleanup.Operation] {
         didSet { defaults.set(cleanupOperations.map(\.rawValue), forKey: key("cleanupOperations")) }
     }
+    /// List files inside .zip archives in the indexed folders.
+    @Published var archiveSearchEnabled: Bool { didSet { defaults.set(archiveSearchEnabled, forKey: key("archiveSearchEnabled")) } }
     /// Expand snippet keywords typed in any app.
     @Published var snippetExpansion: Bool { didSet { defaults.set(snippetExpansion, forKey: key("snippetExpansion")) } }
     /// Web searches reached by a keyword in the search window.
@@ -99,6 +101,7 @@ final class Preferences: ObservableObject {
         quickLinks = links
         defaults.set(QuickLinks.addedLater.map(\.version).max() ?? 1, forKey: "kf4.quickLinksVersion")
         snippetExpansion = value("snippetExpansion", true)
+        archiveSearchEnabled = value("archiveSearchEnabled", true)
         hasCompletedFirstLaunch = value("hasCompletedFirstLaunch", false)
         autoCheckUpdates = value("autoCheckUpdates", true)
         folderAccessRequested = value("folderAccessRequested", false)

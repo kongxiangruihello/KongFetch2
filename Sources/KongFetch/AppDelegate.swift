@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var ocr: OCRService!
     private var updater: Updater!
     private var snippets: SnippetLibrary!
+    private var archives: ArchiveService!
     private var snippetExpansion: SnippetExpansionService!
 
     static var supportDirectory: URL {
@@ -47,8 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if preferences.autoCheckUpdates { updater.startAutomaticChecks() }
         ocr = OCRService(directory: support.appendingPathComponent("OCR", isDirectory: true))
         ocr.onChange = { [weak self] in self?.status.refresh() }
+        archives = ArchiveService(cacheURL: support.appendingPathComponent("archive-index.json"))
+        archives.onChange = { [weak self] in self?.status.refresh() }
         searchPanel = SearchPanelController(coordinator: FileSearchCoordinator(recents: recents, preferences: preferences,
-                                                                               pinyinIndex: pinyinIndex.index, ocrStore: ocr.store))
+                                                                               pinyinIndex: pinyinIndex.index, ocrStore: ocr.store,
+                                                                               archiveIndex: archives.index))
         snippets = SnippetLibrary(fileURL: support.appendingPathComponent("snippets.json"))
         snippetExpansion = SnippetExpansionService(library: snippets, monitor: clipboardMonitor)
         clipboardPanel = ClipboardPanelController(monitor: clipboardMonitor, preferences: preferences, library: snippets)
@@ -175,6 +179,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         preferences.$clipboardRetentionDays.combineLatest(preferences.$clipboardMaximumItems).dropFirst().sink { [weak self] days, count in
             self?.clipboardHistory.limits = ClipboardHistory.Limits(maximumItems: max(20, min(count, 2000)), retentionDays: days > 0 ? days : nil)
         }.store(in: &subscriptions)
+        preferences.$archiveSearchEnabled.dropFirst()
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.restartPinyinIndex() }
+            .store(in: &subscriptions)
         preferences.$pinyinIndexEnabled.combineLatest(preferences.$pinyinIndexExtraRoots).dropFirst()
             .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .sink { [weak self] _, _ in self?.restartPinyinIndex() }
@@ -320,6 +328,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 revealDataFolder: { NSWorkspace.shared.activateFileViewerSelecting([AppDelegate.supportDirectory.appendingPathComponent("Clipboard")]) },
                 requestFolderAccess: { [weak self] in self?.requestFolderAccess() },
                 rebuildPinyinIndex: { [weak self] in self?.pinyinIndex.rebuild(); self?.status.refresh() },
+                scanArchives: { [weak self] in
+                    guard let self, self.preferences.archiveSearchEnabled else { return }
+                    self.archives.scan(self.indexedFolders())
+                },
                 ocrCheckNow: { [weak self] in self?.ocr.checkNow() },
                 ocrSetPaused: { [weak self] paused in self?.ocr.setPaused(paused); self?.status.refresh() },
                 ocrClear: { [weak self] in self?.ocr.clearResults() },
@@ -380,6 +392,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.ocrProgress = ocr.progress
         s.ocrPaused = ocr.paused
         s.update = updater.state
+        s.archiveCount = archives.index.archiveCount
+        s.archiveEntryCount = archives.index.entryCount
+        s.archiveScanning = archives.isScanning
+        s.archiveLastScan = archives.lastScan
         s.snippetListening = snippetExpansion.isListening
         s.snippetInputMethodActive = snippetExpansion.inputMethodActive
         s.snippetProblem = snippetExpansion.lastProblem
@@ -470,7 +486,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Allowed default folders plus the user's extra folders, or nothing when the index is off.
     private func pinyinRoots() -> [String] {
-        guard preferences.pinyinIndexEnabled else { return [] }
+        preferences.pinyinIndexEnabled ? indexedFolders() : []
+    }
+
+    /// Documents, Desktop, Downloads and iCloud Drive (where access was granted) plus the extra folders.
+    private func indexedFolders() -> [String] {
         let access = folderAccessState()
         var roots = FolderAccess.folders.filter { access.fullDisk || access.state[$0.id] == true }.map(\.url.path)
         for extra in preferences.pinyinIndexExtraRoots {
@@ -486,6 +506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func restartPinyinIndex() {
         pinyinIndex.start(roots: pinyinRoots())
+        archives.configure(roots: preferences.archiveSearchEnabled ? indexedFolders() : [])
     }
 
     // MARK: Folder access

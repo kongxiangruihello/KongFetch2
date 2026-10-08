@@ -11,8 +11,12 @@ struct SearchResult: Equatable {
     var modified: Date?
     var size: Int?
     var score: Int
+    /// For a file inside a .zip archive: its path in the archive (`url` is then the archive).
+    var innerPath: String? = nil
 
     var path: String { url.path }
+    /// Distinguishes files inside the same archive.
+    var key: String { innerPath.map { url.path + "\u{0}" + $0 } ?? url.path }
     var isApplication: Bool { url.pathExtension.lowercased() == "app" || contentType == "com.apple.application-bundle" }
 }
 
@@ -285,13 +289,16 @@ final class FileSearchCoordinator {
     let preferences: Preferences
     let pinyinIndex: NameIndex?
     let ocrStore: OCRStore?
+    let archiveIndex: ArchiveIndex?
     private var generation = 0
 
-    init(recents: RecentItems, preferences: Preferences, pinyinIndex: NameIndex? = nil, ocrStore: OCRStore? = nil) {
+    init(recents: RecentItems, preferences: Preferences, pinyinIndex: NameIndex? = nil, ocrStore: OCRStore? = nil,
+         archiveIndex: ArchiveIndex? = nil) {
         self.recents = recents
         self.preferences = preferences
         self.pinyinIndex = pinyinIndex
         self.ocrStore = ocrStore
+        self.archiveIndex = archiveIndex
         applications.refresh()
     }
 
@@ -359,6 +366,15 @@ final class FileSearchCoordinator {
                 if let result = makeResult(path: entry.path, score: score) { results.append(result) }
             }
         }
+        // Files inside .zip archives, a little below files of the same name on disk.
+        if preferences.archiveSearchEnabled, query.kind == nil, !query.nameNeedles.isEmpty, let archives = archiveIndex {
+            for hit in archives.search(query.nameNeedles, limit: 60) {
+                let name = (hit.inner as NSString).lastPathComponent
+                guard query.passesExclusionsAndExtensions(name), FileManager.default.fileExists(atPath: hit.archive) else { continue }
+                results.append(SearchResult(url: URL(fileURLWithPath: hit.archive), displayName: name, fileName: name,
+                                            contentType: nil, modified: nil, size: nil, score: hit.score - 40, innerPath: hit.inner))
+            }
+        }
         return results
     }
 
@@ -421,9 +437,9 @@ final class FileSearchCoordinator {
                                             contentType: hit.contentType, modified: hit.modified, size: hit.size, score: score)
         }
         for var result in local where allowed(result.path) {
-            result.score += recents.boost(for: result.path) - Ranker.locationPenalty(path: result.path, home: home)
-            if let existing = byPath[result.path], existing.score >= result.score { continue }
-            byPath[result.path] = result
+            result.score += (result.innerPath == nil ? recents.boost(for: result.path) : 0) - Ranker.locationPenalty(path: result.path, home: home)
+            if let existing = byPath[result.key], existing.score >= result.score { continue }
+            byPath[result.key] = result
         }
         return byPath.values.sorted {
             $0.score != $1.score ? $0.score > $1.score : $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending

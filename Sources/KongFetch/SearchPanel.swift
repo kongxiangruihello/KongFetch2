@@ -1,6 +1,7 @@
 import AppKit
 import Quartz
 import QuickLookThumbnailing
+import UniformTypeIdentifiers
 import KongFetchCore
 
 /// The main search window: field on top, results on the left, preview on the right.
@@ -281,10 +282,10 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func setRows(_ newRows: [Row]) {
-        let previous = userChoseRow ? selectedResult?.path : nil
+        let previous = userChoseRow ? selectedResult?.key : nil
         rows = newRows
         table.reloadData()
-        let index = previous.flatMap { path in rows.firstIndex { $0.file?.path == path } } ?? 0
+        let index = previous.flatMap { key in rows.firstIndex { $0.file?.key == key } } ?? 0
         if rows.indices.contains(index) {
             table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
             table.scrollRowToVisible(index)
@@ -384,6 +385,17 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
     }
 
     private func open(_ result: SearchResult) {
+        if let inner = result.innerPath {
+            statusLabel.stringValue = "正在从压缩包中取出“\(result.fileName)”…"
+            ArchiveService.open(inner: inner, in: result.url) { [weak self] error in
+                if let error {
+                    self?.statusLabel.stringValue = "无法打开：\(error.localizedDescription)"
+                } else {
+                    self?.hide()
+                }
+            }
+            return
+        }
         hide()
         coordinator.recents.record(result.path)
         if result.isApplication {
@@ -442,6 +454,14 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         let menu = NSMenu()
         menu.autoenablesItems = false
         switch row {
+        case .file(let result) where result.innerPath != nil:
+            add(menu, "解压并打开", "\r", []) { [weak self] in self?.open(result) }
+            add(menu, "在访达中显示压缩包", "\r", [.command]) { [weak self] in self?.revealSelected() }
+            add(menu, "拷贝包内路径", "", []) { [weak self] in
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(result.innerPath ?? "", forType: .string)
+                self?.statusLabel.stringValue = "已拷贝包内路径"
+            }
         case .file(let result):
             add(menu, "打开", "\r", []) { [weak self] in self?.open(result) }
             let openWith = NSMenuItem(title: "打开方式", action: nil, keyEquivalent: "")
@@ -606,6 +626,12 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
         }()
         cell.badge.stringValue = row < 9 ? "⌘\(row + 1)" : ""
         switch rows[row] {
+        case .file(let result) where result.innerPath != nil:
+            let ext = (result.fileName as NSString).pathExtension
+            cell.icon.image = NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data)
+            cell.title.stringValue = result.displayName
+            let folder = ((result.innerPath ?? "") as NSString).deletingLastPathComponent
+            cell.subtitle.stringValue = "压缩包 " + PathDisplay.pretty(result.path, home: NSHomeDirectory()) + (folder.isEmpty ? "" : " ▸ " + folder)
         case .file(let result):
             cell.icon.image = NSWorkspace.shared.icon(forFile: result.path)
             cell.title.stringValue = result.displayName
@@ -738,6 +764,17 @@ final class FilePreviewView: NSView {
         if !definitionScroll.isHidden {
             definitionScroll.isHidden = true
             for view in [imageView, nameLabel, detailLabel, snippetLabel] as [NSView] { view.isHidden = false }
+        }
+        if let result, let inner = result.innerPath {
+            currentPath = result.key
+            currentNeedles = needles
+            let ext = (result.fileName as NSString).pathExtension
+            imageView.image = NSWorkspace.shared.icon(for: UTType(filenameExtension: ext) ?? .data)
+            nameLabel.stringValue = result.fileName
+            detailLabel.stringValue = "在压缩包中：" + PathDisplay.pretty(result.path, home: NSHomeDirectory()) +
+                "\n包内位置：" + inner + "\n\n↩ 解压到临时文件夹并打开　⌘↩ 在访达中显示压缩包"
+            snippetLabel.stringValue = ""
+            return
         }
         guard let result else {
             currentPath = nil
