@@ -37,9 +37,10 @@ final class SnippetLibrary: ObservableObject {
 /// with its snippet: the keyword is deleted with Backspace, the text pasted with ⌘V, and the previous
 /// clipboard put back afterwards.
 ///
-/// Needs Input Monitoring (to see keys) and Accessibility (to send keys). Expansion only happens while a
-/// plain keyboard layout such as ABC is selected: with a Chinese input method the letters are still being
-/// composed when they are typed, and deleting them would break the composition.
+/// Needs Input Monitoring (to see keys) and Accessibility (to send keys). With a keyboard layout such as ABC
+/// the keyword expands at once. With an input method (Pinyin…) the same keys may only be composing, so the
+/// app's text is checked through Accessibility first: the keyword must really be there before the cursor
+/// (in Chinese mode ";" becomes "；", so ";rq" does not match and nothing happens).
 final class SnippetExpansionService {
     private let library: SnippetLibrary
     private let monitor: ClipboardMonitor
@@ -145,7 +146,7 @@ final class SnippetExpansionService {
         case .keyDown:
             if event.getIntegerValueField(.eventSourceUserData) == Self.ownEventTag { return }
             let flags = event.flags
-            if flags.contains(.maskCommand) || flags.contains(.maskControl) || !layoutSelected {
+            if flags.contains(.maskCommand) || flags.contains(.maskControl) {
                 expander.reset()
                 return
             }
@@ -167,8 +168,19 @@ final class SnippetExpansionService {
             guard length > 0 else { return }
             let typed = String(utf16CodeUnits: chars, count: length)
             if let hit = expander.type(typed), let snippet = library.snippet(hit.id) {
-                // Let the keyword's last key reach the app before deleting it.
-                DispatchQueue.main.async { [weak self] in self?.expand(snippet, keywordLength: hit.keywordLength) }
+                if layoutSelected {
+                    // The posted Backspaces queue up behind the keyword's last key.
+                    DispatchQueue.main.async { [weak self] in self?.expand(snippet, keywordLength: hit.keywordLength) }
+                } else {
+                    // Give the app a moment to take the key, then make sure the keyword was committed as typed.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                        guard Self.textBeforeCursor(utf16Length: (snippet.keyword as NSString).length) == snippet.keyword else {
+                            self?.lastProblem = "使用输入法时，未能确认“\(snippet.keyword)”已输入（可切换到英文状态或 ABC 键盘）"
+                            return
+                        }
+                        self?.expand(snippet, keywordLength: hit.keywordLength)
+                    }
+                }
             }
         default:
             break
@@ -202,6 +214,36 @@ final class SnippetExpansionService {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [monitor] in
             monitor.restoreItems(saved)
         }
+    }
+
+    /// The text just before the cursor in the focused text field of the frontmost app, via Accessibility.
+    static func textBeforeCursor(utf16Length: Int) -> String? {
+        guard utf16Length > 0 else { return nil }
+        let system = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+              let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return nil }
+        let focused = focusedRef as! AXUIElement
+        var rangeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
+              let rangeRef, CFGetTypeID(rangeRef) == AXValueGetTypeID() else { return nil }
+        var selection = CFRange()
+        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &selection), selection.length == 0,
+              selection.location >= utf16Length else { return nil }
+        var wanted = CFRange(location: selection.location - utf16Length, length: utf16Length)
+        if let parameter = AXValueCreate(.cfRange, &wanted) {
+            var result: CFTypeRef?
+            if AXUIElementCopyParameterizedAttributeValue(focused, kAXStringForRangeParameterizedAttribute as CFString,
+                                                          parameter, &result) == .success, let text = result as? String {
+                return text
+            }
+        }
+        var valueRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(focused, kAXValueAttribute as CFString, &valueRef) == .success,
+              let value = valueRef as? String else { return nil }
+        let ns = value as NSString
+        guard wanted.location + wanted.length <= ns.length else { return nil }
+        return ns.substring(with: NSRange(location: wanted.location, length: wanted.length))
     }
 
     static func post(key: CGKeyCode, flags: CGEventFlags = [], count: Int = 1) {

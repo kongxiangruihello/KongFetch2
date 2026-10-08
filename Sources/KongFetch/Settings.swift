@@ -555,10 +555,8 @@ private struct SnippetSettings: View {
                 StatusBadge(ok: false, text: "监听尚未启动，稍候会自动重试")
             }
             if let problem = s.snippetProblem { Text(problem).font(.caption).foregroundColor(.orange) }
-            Text(s.snippetInputMethodActive
-                 ? "当前是中文输入法，关键词不会展开。请切换到 ABC 键盘（如按 Caps Lock）后输入，或在剪贴板窗口按 ⇥ 选片段。"
-                 : "只在 ABC 等英文键盘下展开；使用中文输入法时请在剪贴板窗口按 ⇥ 选片段。密码管理器中不展开。")
-                .font(.caption).foregroundColor(s.snippetInputMethodActive ? .orange : .secondary)
+            Text("使用拼音等输入法时，请在英文状态下输入关键词（中文状态下 ; 会变成 ；，不会触发）。少数应用读不到已输入的文字，这时只在 ABC 键盘下展开；也可以在剪贴板窗口按 ⇥ 选片段。密码管理器中不展开。")
+                .font(.caption).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
