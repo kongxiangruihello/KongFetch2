@@ -78,6 +78,11 @@ public enum BatchRename {
         public var item: Item
         public var newName: String
         public var problem: Problem?
+        public init(item: Item, newName: String, problem: Problem? = nil) {
+            self.item = item
+            self.newName = newName
+            self.problem = problem
+        }
         public var changed: Bool { newName != item.name }
         public var newPath: String { (item.folder as NSString).appendingPathComponent(newName) }
     }
