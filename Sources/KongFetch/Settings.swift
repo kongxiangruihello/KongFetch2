@@ -14,6 +14,7 @@ final class AppStatus: ObservableObject {
         var accessibilityAllowed = false
         var searchHotKeyRegistered = false
         var clipboardHotKeyRegistered = false
+        var lookupHotKeyRegistered = false
         var loginItemEnabled = false
         var loginItemNote = ""
         var signing = ""
@@ -131,6 +132,15 @@ private struct GeneralSettings: View {
                 if preferences.searchShortcut != nil && !status.snapshot.searchHotKeyRegistered {
                     Text("这个组合已被系统或其他应用占用，请换一个。").font(.caption).foregroundColor(.orange)
                 }
+                LabeledContent("查询所选文字（词典）") {
+                    ShortcutRecorder(shortcut: $preferences.lookupShortcut)
+                        .frame(width: 220, height: 24)
+                }
+                if preferences.lookupShortcut != nil && !status.snapshot.lookupHotKeyRegistered {
+                    Text("这个组合已被系统或其他应用占用，请换一个。").font(.caption).foregroundColor(.orange)
+                }
+                Text("在任何应用中选中字词后按此快捷键，用系统词典查询；也可以在搜索窗口输入“cd 仁”。")
+                    .font(.caption).foregroundColor(.secondary)
                 Picker("连按两次唤起", selection: $preferences.doubleTapModifier) {
                     ForEach(TapModifier.allCases) { Text($0.title).tag($0) }
                 }
@@ -283,6 +293,8 @@ private struct SearchSettings: View {
                     Text("ext:pdf,docx 或 .pdf　　扩展名")
                     Text("kind:folder　　应用 / 文件夹 / 图片 / pdf / 文档 / 视频 / 音频 / 压缩包")
                     Text("days:7　　　　最近 7 天修改过")
+                    Text("in:论文　　　　只看名称含“论文”的文件夹里的文件；也可写路径 in:~/Documents/讲义")
+                    Text("cd 仁　　　　　查系统词典；hd 仁、ct 学而等为网页搜索（见“网页搜索”）")
                     Text("拼音：应用名称和最近打开的文件支持全拼与首字母，例如 wx、weixin")
                 }
                 .font(.callout)

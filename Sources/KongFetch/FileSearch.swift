@@ -44,7 +44,11 @@ final class SpotlightSearch: NSObject {
         }
         let query = NSMetadataQuery()
         query.predicate = predicate
-        query.searchScopes = [NSMetadataQueryLocalComputerScope]
+        if let scope = input.folderScope, FileManager.default.fileExists(atPath: scope) {
+            query.searchScopes = [URL(fileURLWithPath: scope, isDirectory: true)]
+        } else {
+            query.searchScopes = [NSMetadataQueryLocalComputerScope]
+        }
         query.notificationBatchingInterval = 0.15
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(progress(_:)), name: .NSMetadataQueryGatheringProgress, object: query)
@@ -387,6 +391,7 @@ final class FileSearchCoordinator {
         var byPath: [String: SearchResult] = [:]
 
         func allowed(_ path: String) -> Bool {
+            guard query.isInFolder(path) else { return false }
             if hideLibrary && Ranker.isSystemLocation(path, home: home) { return false }
             return !excludedPrefixes.contains { path == $0 || path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
         }

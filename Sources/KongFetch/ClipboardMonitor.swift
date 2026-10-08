@@ -25,6 +25,8 @@ final class ClipboardMonitor {
     private(set) var lastNotice: String?
     private let recognitionQueue = DispatchQueue(label: "KongFetch.clipboard-ocr", qos: .utility)
     private var recognitionRequested = Set<UUID>()
+    /// Copies made before this moment are not recorded (KongFetch's own ⌘C when looking up a selection).
+    private var ignoreUntil: Date?
 
     init(history: ClipboardHistory, preferences: Preferences, pasteboard: NSPasteboard = .general) {
         self.history = history
@@ -47,6 +49,11 @@ final class ClipboardMonitor {
         timer = nil
     }
 
+    /// Do not record copies for the next `seconds`.
+    func ignoreChanges(for seconds: TimeInterval) {
+        ignoreUntil = Date().addingTimeInterval(seconds)
+    }
+
     /// Ignore whatever is on the pasteboard now (used when recording is switched on or resumed).
     func skipCurrentContents() {
         lastChangeCount = pasteboard.changeCount
@@ -56,6 +63,7 @@ final class ClipboardMonitor {
         let change = pasteboard.changeCount
         guard change != lastChangeCount else { return }
         lastChangeCount = change
+        if let until = ignoreUntil, Date() < until { return }
         guard preferences.clipboardEnabled, !preferences.clipboardPaused else { return }
 
         let types = Set((pasteboard.types ?? []).map(\.rawValue) + (pasteboard.pasteboardItems ?? []).flatMap { $0.types.map(\.rawValue) })

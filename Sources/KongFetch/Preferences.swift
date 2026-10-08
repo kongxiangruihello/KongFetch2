@@ -11,6 +11,8 @@ final class Preferences: ObservableObject {
 
     @Published var searchShortcut: Shortcut? { didSet { store(searchShortcut, "searchShortcut") } }
     @Published var clipboardShortcut: Shortcut? { didSet { store(clipboardShortcut, "clipboardShortcut") } }
+    /// Looks up the selected text in the dictionary.
+    @Published var lookupShortcut: Shortcut? { didSet { store(lookupShortcut, "lookupShortcut") } }
     @Published var doubleTapModifier: TapModifier { didSet { defaults.set(doubleTapModifier.rawValue, forKey: key("doubleTapModifier")) } }
 
     @Published var excludedPathPrefixes: [String] { didSet { defaults.set(excludedPathPrefixes, forKey: key("excludedPathPrefixes")) } }
@@ -61,6 +63,7 @@ final class Preferences: ObservableObject {
 
         searchShortcut = Self.loadShortcut(defaults, "searchShortcut") ?? Shortcut.defaultSearch
         clipboardShortcut = Self.loadShortcut(defaults, "clipboardShortcut") ?? Shortcut.defaultClipboard
+        lookupShortcut = Self.loadShortcut(defaults, "lookupShortcut") ?? Shortcut.defaultLookup
         doubleTapModifier = TapModifier(rawValue: value("doubleTapModifier", "control")) ?? .control
         excludedPathPrefixes = value("excludedPathPrefixes", [String]())
         includeLibraryFolders = value("includeLibraryFolders", false)

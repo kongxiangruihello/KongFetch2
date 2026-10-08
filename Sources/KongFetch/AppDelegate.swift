@@ -127,6 +127,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func registerHotKeys() {
         HotKeyCenter.shared.register(preferences.searchShortcut, for: .search) { [weak self] in self?.searchPanel.toggle() }
         HotKeyCenter.shared.register(preferences.clipboardShortcut, for: .clipboard) { [weak self] in self?.clipboardPanel.toggle() }
+        HotKeyCenter.shared.register(preferences.lookupShortcut, for: .lookup) { [weak self] in self?.lookUpSelection() }
+    }
+
+    /// Looks up the text selected in the frontmost app in the search window's dictionary.
+    private func lookUpSelection() {
+        SelectedText.fetch(monitor: clipboardMonitor) { [weak self] text in
+            let firstLine = text?.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            let word = String(firstLine.trimmingCharacters(in: .whitespaces).prefix(60))
+            self?.searchPanel.show(query: DictionaryLookup.keyword + " " + word)
+        }
     }
 
     private func observePreferences() {
@@ -137,6 +147,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }.store(in: &subscriptions)
         preferences.$clipboardShortcut.dropFirst().sink { [weak self] shortcut in
             HotKeyCenter.shared.register(shortcut, for: .clipboard) { self?.clipboardPanel.toggle() }
+            self?.status.refresh()
+        }.store(in: &subscriptions)
+        preferences.$lookupShortcut.dropFirst().sink { [weak self] shortcut in
+            HotKeyCenter.shared.register(shortcut, for: .lookup) { self?.lookUpSelection() }
             self?.status.refresh()
         }.store(in: &subscriptions)
         preferences.$doubleTapModifier.dropFirst().sink { [weak self] modifier in
@@ -301,6 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.accessibilityAllowed = Paster.isTrusted
         s.searchHotKeyRegistered = HotKeyCenter.shared.isRegistered(.search)
         s.clipboardHotKeyRegistered = HotKeyCenter.shared.isRegistered(.clipboard)
+        s.lookupHotKeyRegistered = HotKeyCenter.shared.isRegistered(.lookup)
         s.loginItemEnabled = LoginItem.isEnabled
         s.loginItemNote = LoginItem.note
         s.signing = SigningInfo.describe()

@@ -138,4 +138,21 @@ final class RankingTests: XCTestCase {
         XCTAssertEqual(PathDisplay.pretty("/Users/k/Documents/GitHub", home: home), "~/Documents/GitHub")
         XCTAssertEqual(PathDisplay.pretty("/Applications", home: home), "/Applications")
     }
+
+    func testFolderFilter() {
+        let named = SearchQuery.parse("王阳明 in:论文")
+        XCTAssertEqual(named.terms, ["王阳明"])
+        XCTAssertEqual(named.folder, "论文")
+        XCTAssertNil(named.folderScope)
+        XCTAssertTrue(named.isInFolder("/Users/k/Documents/论文/2024/王阳明.docx"))
+        XCTAssertTrue(named.isInFolder("/Users/k/Documents/硕士论文初稿/王阳明.docx"))
+        XCTAssertFalse(named.isInFolder("/Users/k/Documents/论文.docx"))
+        XCTAssertFalse(named.isInFolder("/Users/k/Desktop/王阳明.docx"))
+
+        let path = SearchQuery.parse("in:~/Documents/讲义/ 学而")
+        XCTAssertEqual(path.folderScope, NSHomeDirectory() + "/Documents/讲义")
+        XCTAssertTrue(path.isInFolder(NSHomeDirectory() + "/Documents/讲义/第一讲/学而.pdf"))
+        XCTAssertFalse(path.isInFolder(NSHomeDirectory() + "/Documents/讲义2/学而.pdf"))
+        XCTAssertTrue(SearchQuery.parse("学而").isInFolder("/anything/学而.pdf"))
+    }
 }

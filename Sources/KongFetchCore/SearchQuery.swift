@@ -9,6 +9,7 @@ import Foundation
 /// - `ext:pdf,docx` / `.pdf` file extension
 /// - `kind:folder`          application, folder, image, pdf, document, video, audio, archive
 /// - `days:7`               modified within the last N days
+/// - `in:论文` / `in:~/Documents/论文`  inside a folder whose name contains 论文, or inside that path
 public struct SearchQuery: Equatable {
     public enum Kind: String, CaseIterable {
         case application, folder, image, pdf, document, video, audio, archive
@@ -44,8 +45,27 @@ public struct SearchQuery: Equatable {
     public var extensions: [String] = []
     public var kind: Kind?
     public var modifiedWithinDays: Int?
+    /// `in:` value: a folder name fragment or a path.
+    public var folder: String?
 
     public init() {}
+
+    /// The folder to limit Spotlight to, when `in:` names a path ("~/…" or "/…").
+    public var folderScope: String? {
+        guard let folder, folder.hasPrefix("/") || folder.hasPrefix("~") else { return nil }
+        var path = (folder as NSString).expandingTildeInPath
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+
+    /// Whether `path` lies inside the `in:` folder: under the given path, or below a folder whose name contains the text.
+    public func isInFolder(_ path: String) -> Bool {
+        guard let folder else { return true }
+        if let scope = folderScope { return path.hasPrefix(scope == "/" ? "/" : scope + "/") }
+        let needle = TextFolding.fold(folder)
+        let ancestors = (path as NSString).deletingLastPathComponent.split(separator: "/")
+        return ancestors.contains { TextFolding.fold(String($0)).contains(needle) }
+    }
 
     /// Everything that must appear in the name, phrases first.
     public var nameNeedles: [String] { phrases + terms }
@@ -105,6 +125,9 @@ public struct SearchQuery: Equatable {
         case "days", "天":
             guard let days = Int(value), (1...3650).contains(days) else { return false }
             modifiedWithinDays = days
+            return true
+        case "in", "位置", "在":
+            folder = value
             return true
         default:
             return false
