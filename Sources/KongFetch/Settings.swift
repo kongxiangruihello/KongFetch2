@@ -479,9 +479,12 @@ private struct WebSearchSettings: View {
                     .font(.caption).foregroundColor(.secondary)
                     ForEach($preferences.quickLinks) { $link in
                         GridRow {
-                            TextField("", text: $link.keyword).frame(width: 56)
-                            TextField("", text: $link.name).frame(width: 120)
-                            TextField("https://…{query}", text: $link.template)
+                            TextField("关键词", text: $link.keyword)
+                                .labelsHidden().textFieldStyle(.roundedBorder).frame(width: 56)
+                            TextField("名称", text: $link.name)
+                                .labelsHidden().textFieldStyle(.roundedBorder).frame(width: 120)
+                            TextField("网址", text: $link.template, prompt: Text("https://…{query}"))
+                                .labelsHidden().textFieldStyle(.roundedBorder)
                                 .foregroundColor(link.url(for: "论语") == nil ? .orange : .primary)
                             Toggle("", isOn: $link.fallback).labelsHidden()
                             HStack(spacing: 2) {
