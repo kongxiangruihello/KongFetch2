@@ -333,7 +333,11 @@ final class SearchPanelController: NSObject, NSTableViewDataSource, NSTableViewD
                 return
             }
             hide()
-            NSWorkspace.shared.open(url)
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            NSWorkspace.shared.open(url, configuration: configuration) { _, error in
+                if let error { DispatchQueue.main.async { Self.presentError(error) } }
+            }
         }
     }
 

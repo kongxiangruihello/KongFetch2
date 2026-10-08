@@ -13,8 +13,9 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
     private let field = makePanelSearchField(placeholder: "搜索剪贴板历史")
     private let table: NSTableView
     private let scroll: NSScrollView
-    private let textPreview = NSTextView()
-    private let textScroll = NSScrollView()
+    /// A text view set up by AppKit to wrap at the scroll view's width from the first showing on.
+    private let textScroll = NSTextView.scrollableTextView()
+    private var textPreview: NSTextView { textScroll.documentView as! NSTextView }
     private let imagePreview = NSImageView()
     private let detailLabel = makeFooterLabel()
     private let statusLabel = makeFooterLabel()
@@ -85,19 +86,11 @@ final class ClipboardPanelController: NSObject, NSTableViewDataSource, NSTableVi
         pauseButton.action = #selector(togglePause)
         pauseButton.translatesAutoresizingMaskIntoConstraints = false
 
-        textPreview.frame = NSRect(x: 0, y: 0, width: 380, height: 300)
-        textPreview.minSize = NSSize(width: 0, height: 0)
-        textPreview.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textPreview.isEditable = false
         textPreview.isSelectable = true
         textPreview.drawsBackground = false
         textPreview.font = .systemFont(ofSize: 13)
         textPreview.textContainerInset = NSSize(width: 12, height: 12)
-        textPreview.isVerticallyResizable = true
-        textPreview.isHorizontallyResizable = false
-        textPreview.autoresizingMask = [.width]
-        textPreview.textContainer?.widthTracksTextView = true
-        textScroll.documentView = textPreview
         textScroll.drawsBackground = false
         textScroll.hasVerticalScroller = true
         textScroll.autohidesScrollers = true
